@@ -354,6 +354,15 @@ body.cmd #invbar{display:none!important}
 </div>
 
 <script>
+/* ⌨️ 한글 입력 상태에서도 E·F·X·Z·WASD 같은 키가 동작하게: 물리 키(code) 기준으로 key 값을 영문으로 바꿔 줘요 */
+(function(){
+  const fix=e=>{ const t=e.target; if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable)) return;
+    const c=e.code, m=/^Key([A-Z])$/.exec(c||''); if(!m) return; const k=m[1].toLowerCase(); if(e.key===k||e.key===m[1]) return;
+    try{ Object.defineProperty(e,'key',{value:e.shiftKey?m[1]:k,configurable:true}); }catch(x){} };
+  window.addEventListener('keydown',fix,true); window.addEventListener('keyup',fix,true);
+})();
+</script>
+<script>
 /* 🌐 파일로 열었을 때의 온라인: 공개 MQTT 중계 서버(HiveMQ)로 db·room 기능을 대신해요 (claude.ai에 올린 페이지에서는 쓰지 않아요) */
 (function(){
   if(window.claude&&window.claude.use) return;
@@ -606,6 +615,7 @@ function addBuilding(type, tx, ty, roof){
   S.buildings.push(b); return b;
 }
 function place(type, tx, ty){
+  if(!actOk('build')) return;
   if(type==='road'){ paintRoad(tx,ty); return; }
   const def = DB[type];
   if(pop() < def.unlock){ toast(`인구 ${def.unlock}명이 되면 열려요`, 'bad'); return; }
@@ -624,6 +634,7 @@ function place(type, tx, ty){
   assignJobs(); save();
 }
 function demolishAt(wx, wy){
+  if(!actOk('break')) return;
   const tx = Math.floor(wx/TILE), ty = Math.floor(wy/TILE);
   const b = S.buildings.find(b => { const d=DB[b.type]; return tx>=b.x&&tx<b.x+d.w&&ty>=b.y&&ty<b.y+d.h; });
   if(!b){ if(tx>=0&&ty>=0&&tx<W&&ty<H&&road[ty][tx]) road[ty][tx]=0; return; }
@@ -1175,13 +1186,13 @@ function destroyBuilding(b){
 
 /* ----- 도로 ----- */
 const onRoad = (x,y) => { const tx=Math.floor(x/TILE), ty=Math.floor(y/TILE); return tx>=0&&ty>=0&&tx<W&&ty<H&&road[ty][tx]===1; };
-function paintRoad(tx,ty){
+function paintRoad(tx,ty){ if(!actOk('build')) return;
   if(tx<0||ty<0||tx>=W||ty>=H||road[ty][tx]||occ[ty][tx]!==0) return;
   if(Math.hypot((tx+.5)*TILE-P.x,(ty+.5)*TILE-P.y)>TILE*9) return;
   if(S.stone<1){ if(!paintRoad.w){ toast('돌이 부족해요','bad'); paintRoad.w=1; setTimeout(()=>{ paintRoad.w=0; },2000); } return; }
   S.stone-=1; road[ty][tx]=1; S.stats.roads++;
 }
-function paintWall(tx,ty){
+function paintWall(tx,ty){ if(!actOk('build')) return;
   const def=DB.wall; if(pop()<def.unlock) return;
   if(checkPlace(def,tx,ty)) return;
   if(!afford(def.cost)){ if(!paintWall.w){ toast('돌이 부족해요','bad'); paintWall.w=1; setTimeout(()=>{ paintWall.w=0; },2000); } return; }
@@ -1257,6 +1268,7 @@ function checkPois(){
   }
 }
 function openPoi(p){
+  if(p.k==='chest'&&!actOk('chest')) return;
   p.done=true; S.stats.explored++;
   const cx=(p.x+.5)*TILE, cy=p.y*TILE;
   burst(cx,cy+20,'#f4c542',16);
@@ -1568,7 +1580,7 @@ function spawnZombie(x,y){
 }
 let zWarn=0;
 const INFECT_P = .4;          // 🦠 물릴 때마다 감염될 확률 (40%)
-let PDEAD = false;            // 💀 플레이어가 감염으로 죽었는지
+let PDEAD = false; let PDOWN = 0; // PDOWN: 쓰러진 뒤 부활까지 남은 초 (0이면 살아 있어요)            // 💀 플레이어가 감염으로 죽었는지
 P.inf = 0;                    // 🦠 플레이어 감염 타이머 (0이면 감염 아님)
 /* ---------- ❤️ 플레이어 체력 · 🎒 인벤토리 · 🍖 음식 ---------- */
 P.hp = 100; P.hpMax = 100; P.hurtT = 0; P.regenT = 0; P.fk = null;
@@ -1589,19 +1601,105 @@ function invAdd(k,n){
   if(!hintInv){ hintInv = true; toast('🎒 음식은 인벤토리에 담겨요 — 아래 음식을 눌러 들고, 클릭하면 먹어서 ❤️ 회복!','good'); }
 }
 function hurtP(d){
-  if(PDEAD || inCave || P.hp<=0 || !(d>0)) return;
+  if(PDEAD || PDOWN>0 || inCave || P.hp<=0 || P.invT>0 || !(d>0)) return;
   P.hp = Math.max(0, P.hp-d); P.hurtT = .6; P.regenT = 8;
   if(d>=1){ floatText(P.x,P.y-40,'-'+Math.ceil(d)+' ❤️','#ff6a5a'); burst(P.x,P.y-8,'#d94f4f',5); beep([[170,.04]]); }
   if(P.hp<=0) hpDown();
 }
 function hpDown(){
-  P.hp = Math.round(P.hpMax*.5); P.hurtT = 0; P.regenT = 6; P.inf = 0;
-  const lost = Math.floor(S.coin*.1); S.coin -= lost;
-  P.x = START.x*TILE; P.y = START.y*TILE; P.target = null; P.hT = 0; P.swing = 0;
-  mouseDown = false; atkBtn = false; SCOPE.held = false;
-  beep([[220,.15],[150,.2],[100,.3]]); try{ zFlash(); }catch(e){}
-  toast(`😵 쓰러졌다가 마을 중심에서 깨어났어요${lost?` (코인 -${lost})`:''} · 체력 ${P.hp}`,'bad');
-  cam.x = P.x-vw/2; cam.y = P.y-vh/2;
+  if(PDOWN>0) return;
+  const by=(P.lastBy&&performance.now()-(P.lastByT||0)<8000)?P.lastBy:null; P.lastBy=null;
+  PDOWN=5; P.hp=0; P.hurtT=0; P.regenT=99; P.inf=0;
+  mouseDown=false; atkBtn=false; SCOPE.held=false; harvestBtn=false; P.target=null; P.hT=0; P.swing=0; P.moving=false;
+  burst(P.x,P.y-8,'#d94f4f',22); beep([[220,.15],[150,.2],[100,.3]]); try{ zFlash(); }catch(e){}
+  toast(by?`💀 ${by.n}님에게 쓰러졌어요 · 5초 뒤 부활해요`:'💀 쓰러졌어요 · 5초 뒤 마을 중심에서 부활해요','bad');
+  try{ const L=window.__vtLive; if(L&&L.onDown) L.onDown(by); }catch(e){}
+}
+function respawnNow(){ // ✨ 5초가 지나면 마을 중심에서 체력을 가득 채우고 부활해요 (3초 동안은 무적)
+  PDOWN=0; const lost=Math.floor(S.coin*.1); S.coin-=lost;
+  P.hp=P.hpMax; P.hurtT=0; P.regenT=0; P.inf=0; P.invT=3;
+  P.x=START.x*TILE; P.y=START.y*TILE; P.target=null; P.hT=0; P.swing=0;
+  burst(P.x,P.y-8,'#9fe6ff',18); beep([[420,.06],[560,.08],[760,.1]]);
+  toast(`✨ 부활했어요! 마을 중심에서 다시 시작해요${lost?` (코인 -${lost})`:''}`,'good');
+  cam.x=P.x-vw/2; cam.y=P.y-vh/2;
+}
+/* 🔑 방장이 정한 멤버 권한 · ⚔️ 플레이어끼리 싸우기(PvP) */
+const PERMMSG={ build:'🏗️ 이 월드에서 설치할 권한이 없어요', break:'🔨 이 월드에서 부술 권한이 없어요', hit:'⚔️ 이 월드에서 다른 플레이어를 때릴 권한이 없어요', chest:'📦 이 월드에서 상자를 열 권한이 없어요' };
+let _permT=0;
+function actOk(kind){
+  if(PDOWN>0) return false;
+  const L=window.__vtLive, pm=L&&L.perm;
+  if(pm&&pm[kind]===false){ const n=performance.now(); if(n-_permT>2500){ _permT=n; toast(PERMMSG[kind]+' (방장에게 부탁해 보세요)','bad'); } return false; }
+  return true;
+}
+function caveIdNow(){ return (inCave&&!inCave.art)?('p'+pois.indexOf(inCave)):''; } // 🕳️ 같은 동굴·던전에 있는지 알아보는 번호 (인공 동굴은 제외)
+function caveGhosts(){ // 같은 동굴에 있는 다른 플레이어 (그리기용 · 부드럽게 따라가요)
+  const L=window.__vtLive, ci=caveIdNow(); if(!ci||!L||!L.peers) return []; const out=[];
+  for(const o of L.peers){ if(!o.c||o.ci!==ci) continue;
+    if(o._pci!==o.ci||typeof o.crx!=='number'){ o.crx=o.cx; o.cry=o.cy; o._pci=o.ci; }
+    o.crx+=(o.cx-o.crx)*.35; o.cry+=(o.cy-o.cry)*.35; out.push(o); }
+  return out; }
+function pvpList(){
+  const L=window.__vtLive; if(!L||!L.peers||!L.peers.length||PDOWN>0) return [];
+  if(!inCave) return L.peers.filter(o=>!o.c&&!o.dd&&!o.pr&&o.uid);
+  const ci=caveIdNow(); if(!ci||(inCave.k==='ruin'&&(DP.hp<=0||DP.dieT>0))) return [];
+  return L.peers.filter(o=>o.c&&o.ci===ci&&!o.dd&&!o.pr&&o.uid&&typeof o.crx==='number').map(o=>Object.assign({},o,{rx:o.crx,ry:o.cry})); // 동굴 안에서는 동굴 좌표로 계산해요
+}
+/* ⚔️ 동굴·던전 안에서 맞았을 때 */
+function caveHurtMe(d,ang,kb,by,uid,head){
+  if(!caveIdNow()) return false;
+  const k=Math.min(26,Math.max(0,(+kb||0)*2.2)), kx=Math.cos(ang)*k, ky=Math.sin(ang)*k;
+  if(inCave.k==='ruin'){
+    if(DP.hp<=0||DP.dieT>0||DP.inv>0) return false;
+    P.lastBy={n:by,u:uid}; P.lastByT=performance.now();
+    DP.hp-=d; DP.flash=.3; DP.shake=Math.max(DP.shake,.15);
+    floatText(CP.x,CP.y-34,'-'+Math.ceil(d),'#ff6b6b'); if(head) floatText(CP.x,CP.y-56,'💀 헤드샷!','#ffd25a');
+    burst(CP.x,CP.y-8,'#d94f4f',7); beep([[190,.05],[120,.09]]);
+    const c=inCave.dg; if(!dgHit(c,CP.x+kx,CP.y,11)) CP.x+=kx; if(!dgHit(c,CP.x,CP.y+ky,11)) CP.y+=ky;
+    if(DP.hp<=0) dgDie();
+    return true;
+  }
+  P.lastBy={n:by,u:uid}; P.lastByT=performance.now();
+  P.hp=Math.max(0,P.hp-d); P.hurtT=.6; P.regenT=8;
+  floatText(CP.x,CP.y-34,'-'+Math.ceil(d),'#ff6b6b'); if(head) floatText(CP.x,CP.y-56,'💀 헤드샷!','#ffd25a');
+  burst(CP.x,CP.y-8,'#d94f4f',7); beep([[170,.04]]);
+  if(!caveHit(CP.x+kx,CP.y,11)) CP.x+=kx; if(!caveHit(CP.x,CP.y+ky,11)) CP.y+=ky;
+  if(P.hp<=0){ exitCave(); hpDown(); } // 일반 동굴에서 쓰러지면 입구로 나와서 5초 뒤 마을에서 부활해요
+  return true;
+}
+function pvpSend(o,dmg,ang,kb,head){
+  const L=window.__vtLive; if(!L||!L.sendHit||!(dmg>0)) return;
+  if(!actOk('hit')) return;
+  L.sendHit(o.uid,dmg,ang,kb,head);
+  floatText(o.rx,o.ry-46,(head?'💀 -':'-')+Math.round(dmg),head?'#ffd25a':'#fff'); burst(o.rx,o.ry-12,'#d94f4f',head?8:5);
+}
+function peerStrike(w,ang){ // 근접·광선 무기가 다른 플레이어에게 닿는지 확인해요 (총알·화살은 updateBullets에서)
+  const ps=pvpList(); if(!ps.length) return;
+  const cx=Math.cos(ang), cy=Math.sin(ang), hits=[], ox=inCave?CP.x:P.x, oy=inCave?CP.y:P.y, wall=inCave?(inCave.dg||inCave.cv):null;
+  for(const o of ps){
+    if(wall&&!dgLos(wall,ox,oy-12,o.rx,o.ry-12)) continue; // 벽 너머로는 못 때려요
+    const rx=o.rx-ox, ry=(o.ry-10)-(oy-12), d=Math.hypot(rx,ry), pj=rx*cx+ry*cy; let ok;
+    if(!w.ranged){ const range=Math.min(w.range,78)+10; ok = w.sweep ? d<=range : (d<=range && (d<26 || pj/d>=.3)); }
+    else ok = pj>-12 && pj<=w.range && Math.abs(-rx*cy+ry*cx)<=(w.wid||16);
+    if(ok) hits.push([d,o]);
+  }
+  hits.sort((a,b)=>a[0]-b[0]);
+  const kb=w.ranged?6:clamp(w.dmg*2.8,4,16)*(w.sweep?.7:1);
+  for(const h of hits){ pvpSend(h[1],w.dmg,ang,kb,false); if(!w.sweep&&!w.pierce&&!(w.pellets>1)) break; }
+}
+function pvpSplash(x,y,R,dmg){ // 💥 폭발이 다른 플레이어에게도 피해를 줘요
+  for(const o of pvpList()){ const dx=o.rx-x, dy=(o.ry-14)-y, d=Math.hypot(dx,dy); if(d>R+8) continue; pvpSend(o,dmg*Math.max(.35,1-d/R*.65),Math.atan2(dy,dx),KB_EXP*.5,false); }
+}
+/* 💀 쓰러졌을 때 화면 가운데에 부활까지 남은 시간을 보여줘요 */
+const respOv=document.createElement('div');
+respOv.style.cssText='position:fixed;left:50%;top:36%;transform:translate(-50%,-50%);z-index:60;display:none;pointer-events:none;text-align:center;padding:14px 28px;border-radius:16px;background:rgba(40,0,0,.74);border:2px solid #d94f4f;color:#ffe9e6;font:400 30px Jua,sans-serif;text-shadow:0 2px 6px #000';
+document.body.appendChild(respOv);
+let _rsig='';
+function respLeft(){ return PDOWN>0?PDOWN:((inCave&&DP.hp<=0&&DP.dieT>0)?DP.dieT:0); }
+function updateRespUi(){
+  const t=respLeft();
+  if(t>0){ const h='💀 쓰러졌어요<br><span style="font-size:22px;color:#ffd27a">'+Math.ceil(t)+'초 뒤 부활해요</span>'; if(h!==_rsig){ _rsig=h; respOv.innerHTML=h; } respOv.style.display='block'; }
+  else if(respOv.style.display!=='none'){ respOv.style.display='none'; _rsig=''; }
 }
 function raidHitP(r,def,dt){
   if(PDEAD || inCave || r.dead || r.st!=='in' || def.infect) return;
@@ -1614,7 +1712,7 @@ function raidHitP(r,def,dt){
   } else if(q<24 && r.pcd<=0){ r.pcd=1; hurtP(atk*1.5); }
 }
 function eatFood(){
-  if(PDEAD || inCave || P.hold!=='food') return;
+  if(PDEAD || PDOWN>0 || inCave || P.hold!=='food') return;
   const now = performance.now(); if(now-eatT<450) return;
   let k = P.fk; if(!(S.inv[k]>0)) k = P.fk = firstFood();
   if(!k){ setHold('pick',true); return; }
@@ -1652,6 +1750,8 @@ function renderInv(){
   el.innerHTML = '<span>🎒</span>' + ks.map(k=>`<button data-k="${k}" class="${P.hold==='food'&&P.fk===k?'on':''}">${FOOD[k].e} ${FOOD[k].n} <b>${S.inv[k]}</b></button>`).join('');
 }
 function playerVitals(dt){
+  if(PDOWN>0){ PDOWN-=dt; if(PDOWN<=0) respawnNow(); }
+  if(P.invT>0) P.invT-=dt;
   if(P.hurtT>0) P.hurtT-=dt;
   if(!PDEAD && P.hp>0 && P.hp<P.hpMax){ if(P.regenT>0) P.regenT-=dt; else P.hp=Math.min(P.hpMax,P.hp+.3*dt); }
   critterRespawn(dt);
@@ -2833,7 +2933,7 @@ function fireBullets(w,ang,manual,tgt){
   const dir0=ag, spd=(arrowSpd(w)*(bp<0?1:.55+.75*bp))||(w.splash?(w.shot==='magic'?950:w.id==='grenade'?750:650):w.id==='sniper'?2600:n>1?1100:(w.cd<.15?1700:1500));
   for(let i=0;i<n;i++){
     const a2=dir0+(n>1?(i/(n-1)-.5)*(w.spread||.5):0)+(Math.random()-.5)*(n>1?.07:(w.cd<.15?.045:.02));
-    bullets.push({ kb:gunKb(w)*bkb, hm:w.arrow?2:(w.headMul||2.5), exp:expOf(w), x:P.x, y:hy, vx:Math.cos(a2)*spd, vy:Math.sin(a2)*spd, a:a2, d:0, vis:len, max:w.range*brg+len, dmg:w.dmg*bdm, pierce:!!w.pierce||bpr, big:!!w.pierce||n>1, col:n>1?'#ffcf70':w.pierce?'#d6ecff':'#ffe9a0', arrow:w.arrow?w.id:0, fire:atype==='fire', psn:atype==='poison', dmgB:w.dmg, pw:bp<0?0:bp, hit:new Set(), pn:0 });
+    bullets.push({ pv:1, kb:gunKb(w)*bkb, hm:w.arrow?2:(w.headMul||2.5), exp:expOf(w), x:P.x, y:hy, vx:Math.cos(a2)*spd, vy:Math.sin(a2)*spd, a:a2, d:0, vis:len, max:w.range*brg+len, dmg:w.dmg*bdm, pierce:!!w.pierce||bpr, big:!!w.pierce||n>1, col:n>1?'#ffcf70':w.pierce?'#d6ecff':'#ffe9a0', arrow:w.arrow?w.id:0, fire:atype==='fire', psn:atype==='poison', dmgB:w.dmg, pw:bp<0?0:bp, hit:new Set(), pn:0 });
   }
   if(w.gun) flashes.push({ x:mx, y:my, a:ag, life:.07, max:.07, big:n>1||!!w.pierce });
   if(w.gun) gunSnd(w); else SFX.bow(w.id, bp<0?null:bp);
@@ -3086,6 +3186,7 @@ function boomAt(b,direct){
   const e=b.exp, x=b.x, y=b.y, R=e.r;
   booms.push({ x,y,r:R,life:e.small?.3:.5,max:e.small?.3:.5,k:e.k });
   boomFx(x,y,e);
+  if(b.pv) pvpSplash(x,y,R,e.dmg);
   for(const r of raiders.slice()){
     if(r.dead) continue; const {H}=rBox(r), dx=r.x-x, dy=(r.y-H*.4)-y, d=Math.hypot(dx,dy);
     if(r!==direct && d>R+8) continue;
@@ -3097,6 +3198,7 @@ function boomAt(b,direct){
 }
 function dgBoomAt(c,b,direct){
   const e=b.exp, x=b.x, y=b.y, R=e.r;
+  if(b.pv) pvpSplash(x,y,R,e.dmg);
   cbooms.push({ c,x,y,r:R,life:e.small?.3:.5,max:e.small?.3:.5,k:e.k });
   boomFx(x,y,e);
   for(const s of c.traps) if(s.k==='dart'&&!s.gone&&Math.hypot((s.x+.5)*TILE-x,(s.y+.5)*TILE-y)<R) dgHurtTrap(c,s);
@@ -3145,6 +3247,14 @@ function updateBullets(dt){
         break;
       }
       if(dead) break;
+      if(b.pv){ const Lv=window.__vtLive, pp=pvpList(); for(const o of pp){ // ⚔️ 다른 플레이어에게 맞았는지
+        if(b.hit.has(o.uid)) continue; const dx=Math.abs(b.x-o.rx), dy=b.y-o.ry; if(dx>10||dy>6||dy<-36) continue;
+        if(Lv.perm&&Lv.perm.hit===false){ actOk('hit'); b.hit.add(o.uid); continue; }
+        if(b.exp){ boomAt(b,null); dead=true; break; }
+        b.hit.add(o.uid); const head=dy<-25&&!b.beam, dm=b.dmg*(head?(b.hm||2.5):1)*Math.pow(.88,b.pn);
+        pvpSend(o,dm,Math.atan2(uy,ux),b.kb*Math.pow(.7,b.pn),head);
+        if(b.pierce) b.pn++; else dead=true; break; } }
+      if(dead) break;
       if(!b.exp) for(let k=critters.length-1;k>=0;k--){ const c=critters[k]; if(Math.hypot(c.x-b.x,(c.y-6)-b.y)<9){ killCritter(k); if(!b.pierce) dead=true; break; } }
     }
     if(!dead && b.exp && b.d>b.vis && Math.random()<.5) burst(b.x,b.y,b.exp.k==='magic'?'#d68bff':'#9aa0a6',1);
@@ -3183,6 +3293,7 @@ function updateCombat(dt){
   if(P.cd>0) P.cd-=dt; if(P.atkT>0) P.atkT-=dt;
   for(const s of fx.shots) s.life-=dt;
   fx.shots = fx.shots.filter(s => s.life>0);
+  if(PDOWN>0){ mouseDown=false; atkBtn=false; return; } // 쓰러진 동안엔 공격할 수 없어요
   // 소총: 마우스 방향으로 360도 조준
   if(WDB[S.weapon] && WDB[S.weapon].gun && started && !mode && mouse.in && mouse.m && (!inCave || inCave.k==='ruin')){ const a=inCave?aimAngC():aimAng(); P.fx=Math.cos(a); P.fy=Math.sin(a); }
   const clickAtk = mouseDown && mouse.in && mouse.m && !selected && S.weapon && P.hold==='weapon'; // 마우스 왼쪽 클릭 공격
@@ -3227,6 +3338,7 @@ function updateCombat(dt){
     if(w.sweep) near.forEach(r => { hurtRaider(r, w.dmg); meleeKnock(r,w); }); else if(cone[0]){ hurtRaider(cone[0], w.dmg); meleeKnock(cone[0],w); }
   }
   critterStrike(w, ang);
+  peerStrike(w, ang);
 }
 function drawHpBar(r){
   if(r.dead || (r.hp>=r.max && !r.elite)) return;
@@ -3689,6 +3801,7 @@ function drawHeld(){
 
 /* ----- 월드 클릭 / 창 ----- */
 function worldClick(wx,wy){
+  if(PDOWN>0) return;
   if(S.merchant&&Math.hypot(S.merchant.x-wx,S.merchant.y-14-wy)<34){
     if(Math.hypot(S.merchant.x-P.x,S.merchant.y-P.y)<TILE*4.5) openModal('trade'); else toast('상인에게 더 가까이 가요','bad');
     return;
@@ -4821,6 +4934,7 @@ window.addEventListener('keydown',e=>{
   if([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) e.preventDefault();
   keys.add(k);
   if(e.repeat) return;
+  if(PDOWN>0) return;
   if(inCave) return;
   if(k==='1'||k==='2'||k==='3'){ setHold(k==='1'?'pick':k==='2'?'axe':'weapon'); }
   else if(k>='4'&&k<='9'&&DEFS[+k-1]){ select(DEFS[+k-1].id); }
@@ -4838,7 +4952,7 @@ window.addEventListener('blur',()=>mouseDown=false);
 cv.addEventListener('pointerdown',e=>{
   if(e.button===2&&e.pointerType==='mouse'&&(scopeAllowed()||bowAllowed()||melAllowed())) return; // 우클릭 = 조준경 / 활 시위 / 근접 스킬
   if(e.button===0&&e.pointerType==='mouse'){ mouse.x=e.clientX; mouse.y=e.clientY; mouse.in=true; mouse.m=true; mouseDown=true; }
-  if(!started||inCave||SCOPE.z>1.001) return;
+  if(!started||inCave||PDOWN>0||SCOPE.z>1.001) return;
   if(!selected){ worldClick(e.clientX+cam.x,e.clientY+cam.y); return; }
   mouse.x=e.clientX; mouse.y=e.clientY;
   const wx=e.clientX+cam.x, wy=e.clientY+cam.y;
@@ -5044,6 +5158,8 @@ $('#mbody').addEventListener('click',e=>{
   try{ localStorage.setItem('villageTycoon_zstyle',ZSTYLE); }catch(e){}
 });
 function drawPlayer(){
+  if(PDOWN>0){ shadow(P.x,P.y+8,11,4); ctx.save(); ctx.translate(P.x,P.y-2); ctx.rotate(Math.PI/2); ctx.globalAlpha=.75; drawLook(ctx); ctx.restore(); ctx.save(); ctx.font='20px sans-serif'; ctx.textAlign='center'; ctx.fillText('💀',P.x,P.y-26); ctx.restore(); return; }
+  if(P.invT>0&&Math.sin(performance.now()/90)>-.2){ ctx.save(); ctx.strokeStyle='rgba(150,225,255,.9)'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(P.x,P.y-8,17,0,7); ctx.stroke(); ctx.restore(); }
   const bob=P.moving?Math.abs(Math.sin(P.walk))*3:0;
   shadow(P.x,P.y+8,11,4);
   ctx.save(); ctx.translate(P.x,P.y-bob);
@@ -5064,22 +5180,49 @@ function drawPlayer(){
 /* ---------- render ---------- */
 /* 🌐 다른 플레이어(친구) 그리기: 닉네임 + 같은 월드에 들어온 친구의 실시간 위치 */
 function drawOther(o){
-  const bob=o.mv?Math.abs(Math.sin(o.wk))*3:0;
+  const bob=(o.mv&&!o.dd)?Math.abs(Math.sin(o.wk))*3:0, pc=o.dd?'#e9a0a0':'#ffe27a';
   shadow(o.rx,o.ry+8,11,4);
+  // 발밑 링: 멀리서도 친구가 눈에 띄게
+  ctx.save(); ctx.strokeStyle=o.dd?'rgba(200,120,120,.85)':'rgba(255,226,122,.9)'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.ellipse(o.rx,o.ry+8,16,6.5,0,0,7); ctx.stroke(); ctx.restore();
+  if(o.pr&&!o.dd){ ctx.save(); ctx.strokeStyle='rgba(150,225,255,.9)'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(o.rx,o.ry-8,17,0,7); ctx.stroke(); ctx.restore(); }
   ctx.save(); ctx.translate(o.rx,o.ry-bob);
-  const sv=LOOK; LOOK=o.look; try{ drawLook(ctx); }finally{ LOOK=sv; }
-  ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(o.fx*2.5-2,-17+o.fy*1.5,1,0,7); ctx.arc(o.fx*2.5+2.5,-17+o.fy*1.5,1,0,7); ctx.fill();
-  ctx.font='13px Jua, sans-serif'; ctx.textAlign='center'; ctx.lineWidth=4; ctx.strokeStyle='rgba(20,40,30,.85)'; ctx.fillStyle='#f4c542';
-  ctx.strokeText(o.name,0,-34); ctx.fillText(o.name,0,-34);
+  const sv=LOOK; LOOK=o.look;
+  if(o.dd){ ctx.save(); ctx.translate(0,-2+bob); ctx.rotate(Math.PI/2); ctx.globalAlpha=.65; try{ drawLook(ctx); }finally{ LOOK=sv; } ctx.restore(); ctx.font='20px sans-serif'; ctx.textAlign='center'; ctx.fillText('💀',0,-26); }
+  else { try{ drawLook(ctx); }finally{ LOOK=sv; }
+    ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(o.fx*2.5-2,-17+o.fy*1.5,1,0,7); ctx.arc(o.fx*2.5+2.5,-17+o.fy*1.5,1,0,7); ctx.fill(); }
+  // 머리 위 닉네임 이름표
+  const nick=String(o.name||'?');
+  ctx.font='bold 15px Jua, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+  const tw=Math.ceil(ctx.measureText(nick).width)+16, bx=-tw/2, by=-56;
+  ctx.fillStyle='rgba(20,40,30,.85)'; ctx.strokeStyle=pc; ctx.lineWidth=2; ctx.beginPath();
+  if(ctx.roundRect) ctx.roundRect(bx,by,tw,20,10); else ctx.rect(bx,by,tw,20);
+  ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-4,by+20); ctx.lineTo(4,by+20); ctx.lineTo(0,by+25); ctx.closePath(); ctx.fillStyle=pc; ctx.fill();
+  ctx.fillStyle=pc; ctx.fillText(nick,0,by+15);
   ctx.restore();
 }
-window.__vtLive={ peers:[], me:()=>({x:Math.round(P.x),y:Math.round(P.y),fx:+P.fx.toFixed(2),fy:+P.fy.toFixed(2),mv:P.moving?1:0,wk:+P.walk.toFixed(2),c:inCave?1:0,st:started?1:0,look:LOOK}) };
+window.__vtLive={ peers:[], me:()=>({x:Math.round(P.x),y:Math.round(P.y),fx:+P.fx.toFixed(2),fy:+P.fy.toFixed(2),mv:P.moving?1:0,wk:+P.walk.toFixed(2),c:inCave?1:0,ci:caveIdNow(),cx:Math.round(CP.x),cy:Math.round(CP.y),st:started?1:0,look:LOOK,dd:(PDOWN>0||(inCave&&DP.hp<=0&&DP.dieT>0))?1:0,pr:P.invT>0?1:0}) };
 /* 🏘️ 공유 마을: 다른 플레이어가 짓고 허문 건물을 재료 소모 없이 반영 */
 Object.assign(window.__vtLive,{
-  bl:()=>S.buildings.map(b=>[b.type,b.x,b.y,b.lv||1]),
-  addAt:(t,x,y,lv)=>{ const d=DB[t]; if(!d||!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+d.w>W||y+d.h>H) return false;
+  world:()=>WORLD?{id:WORLD.id,name:WORLD.name}:null,
+  toast:(m,k)=>toast(m,k),
+  hurtMe:(d,ang,kb,by,uid,head)=>{ // ⚔️ 다른 플레이어에게 맞았어요
+    if(!started||PDOWN>0||PDEAD||P.invT>0||!(d>0)) return false;
+    if(inCave) return caveHurtMe(d,ang,kb,by,uid,head);
+    P.lastBy={n:by,u:uid}; P.lastByT=performance.now(); hurtP(d);
+    if(head) floatText(P.x,P.y-56,'💀 헤드샷!','#ffd25a');
+    const k=Math.min(26,Math.max(0,(+kb||0)*2.2)), nx=P.x+Math.cos(ang)*k, ny=P.y+Math.sin(ang)*k;
+    if(!hit(nx,P.y,11)) P.x=nx; if(!hit(P.x,ny,11)) P.y=ny;
+    return true; },
+  tp:(x,y)=>{ if(inCave) return false; x=clamp(x,24,W*TILE-24); y=clamp(y,24,H*TILE-24);
+    for(let r=0;r<=8;r++){ const n=r?r*8:1; for(let k=0;k<n;k++){ const a=k/n*Math.PI*2, nx=x+Math.cos(a)*r*TILE*.75, ny=y+Math.sin(a)*r*TILE*.75; if(nx<20||ny<20||nx>W*TILE-20||ny>H*TILE-20||hit(nx,ny,11)) continue; P.x=nx; P.y=ny; P.target=null; P.hT=0; cam.x=P.x-vw/2; cam.y=P.y-vh/2; return true; } } return false; },
+  bl:()=>S.buildings.map(b=>[b.type,b.x,b.y,b.lv||1,b.roof]),
+  rd:()=>{ const a=[]; for(let y=0;y<H;y++) for(let x=0;x<W;x++) if(road[y][x]===1) a.push(x+'_'+y); return a; },
+  addRoad:(x,y)=>{ if(!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x>=W||y>=H||road[y][x]||occ[y][x]!==0) return false; road[y][x]=1; return true; },
+  delRoad:(x,y)=>{ if(road[y]&&road[y][x]===1) road[y][x]=0; },
+  addAt:(t,x,y,lv,roof)=>{ const d=DB[t]; if(!d||!Number.isInteger(x)||!Number.isInteger(y)||x<0||y<0||x+d.w>W||y+d.h>H) return false;
     for(let j=y;j<y+d.h;j++) for(let i=x;i<x+d.w;i++) if(occ[j][i]===1||occ[j][i]===3) return false;
-    clearResFor(x,y,d.w,d.h); const b=addBuilding(t,x,y); b.lv=Math.max(1,Math.min(9,lv|0||1)); if(t==='castle') S.castle=true;
+    clearResFor(x,y,d.w,d.h); const b=addBuilding(t,x,y,Number.isInteger(roof)&&roof>=0&&roof<ROOFS.length?roof:undefined); b.lv=Math.max(1,Math.min(9,lv|0||1)); if(t==='castle') S.castle=true;
     burst((x+d.w/2)*TILE,(y+d.h/2)*TILE,'#8fd0ff',10); assignJobs(); return true; },
   setLv:(x,y,lv)=>{ const b=S.buildings.find(b=>b.x===x&&b.y===y); if(b) b.lv=Math.max(1,Math.min(9,lv|0||1)); },
   delAt:(x,y)=>{ const b=S.buildings.find(b=>b.x===x&&b.y===y); if(!b) return; const d=DB[b.type];
@@ -5163,6 +5306,11 @@ function render(t){
     for(const b of S.buildings){ if(b.type==='house'||b.type==='castle'||b.type==='market'){ const d=DB[b.type]; const g=ctx.createRadialGradient((b.x+d.w/2)*TILE,(b.y+d.h*.6)*TILE,4,(b.x+d.w/2)*TILE,(b.y+d.h*.6)*TILE,d.w*TILE*.8); g.addColorStop(0,`rgba(255,200,90,${NIGHT*.35})`); g.addColorStop(1,'rgba(255,200,90,0)'); ctx.fillStyle=g; ctx.fillRect((b.x-1)*TILE,(b.y-1)*TILE,(d.w+2)*TILE,(d.h+2)*TILE); } }
     ctx.globalCompositeOperation='source-over';
   }
+  { const pe=window.__vtLive.peers; /* 화면 밖 친구: 가장자리 화살표 + 닉네임 + 거리 */
+    if(pe.length&&!inCave){ for(const o of pe){ if(o.c) continue; const sx=o.rx-camx, sy=o.ry-camy; if(sx>24&&sx<vw-24&&sy>48&&sy<vh-24) continue;
+      ctx.save(); ctx.setTransform(dpr,0,0,dpr,0,0); const hx=vw/2, hy=vh/2, dx=sx-hx, dy=sy-hy, k2=Math.min((hx-46)/Math.abs(dx||1),(hy-56)/Math.abs(dy||1)), ax=hx+dx*k2, ay=hy+dy*k2, ang=Math.atan2(dy,dx);
+      ctx.translate(ax,ay); ctx.rotate(ang); ctx.fillStyle='#ffe27a'; ctx.strokeStyle='rgba(20,40,30,.9)'; ctx.lineWidth=3; ctx.lineJoin='round'; ctx.beginPath(); ctx.moveTo(15,0); ctx.lineTo(-8,-10); ctx.lineTo(-8,10); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.rotate(-ang);
+      const lb=o.name+' · '+Math.round(Math.hypot(o.x-P.x,o.y-P.y)/TILE)+'칸'; ctx.font='bold 14px Jua, sans-serif'; ctx.textAlign='center'; ctx.lineWidth=4; ctx.strokeStyle='rgba(20,40,30,.9)'; ctx.strokeText(lb,0,-16); ctx.fillStyle='#fff'; ctx.fillText(lb,0,-16); ctx.restore(); } } }
 }
 
 
@@ -5328,7 +5476,7 @@ function dgFireGun(c,w,man,tgt){
   const dir0=ag, spd=(arrowSpd(w)*(bp<0?1:.55+.75*bp))||(w.splash?(w.shot==='magic'?950:w.id==='grenade'?750:650):w.id==='sniper'?2600:n>1?1100:(w.cd<.15?1700:1500));
   for(let i=0;i<n;i++){
     const a2=dir0+(n>1?(i/(n-1)-.5)*(w.spread||.5):0)+(Math.random()-.5)*(n>1?.07:(w.cd<.15?.045:.02));
-    cbullets.push({ c, hm:w.arrow?2:(w.headMul||2.5), exp:expOf(w), x:CP.x, y:hy, vx:Math.cos(a2)*spd, vy:Math.sin(a2)*spd, a:a2, d:0, vis:len, max:w.range*brg+len, dmg:w.dmg*bdm, pierce:!!w.pierce||bpr, big:!!w.pierce||n>1, col:n>1?'#ffcf70':w.pierce?'#d6ecff':'#ffe9a0', arrow:w.arrow?w.id:0, fire:atype==='fire', psn:atype==='poison', dmgB:w.dmg, pw:bp<0?0:bp, hit:new Set(), pn:0 });
+    cbullets.push({ c, pv:1, kb:gunKb(w)*bkb, hm:w.arrow?2:(w.headMul||2.5), exp:expOf(w), x:CP.x, y:hy, vx:Math.cos(a2)*spd, vy:Math.sin(a2)*spd, a:a2, d:0, vis:len, max:w.range*brg+len, dmg:w.dmg*bdm, pierce:!!w.pierce||bpr, big:!!w.pierce||n>1, col:n>1?'#ffcf70':w.pierce?'#d6ecff':'#ffe9a0', arrow:w.arrow?w.id:0, fire:atype==='fire', psn:atype==='poison', dmgB:w.dmg, pw:bp<0?0:bp, hit:new Set(), pn:0 });
   }
   if(w.gun) cflashes.push({ x:mx, y:my, a:ag, life:.07, max:.07, big:n>1||!!w.pierce });
   if(w.gun) gunSnd(w); else SFX.bow(w.id, bp<0?null:bp);
@@ -5362,10 +5510,18 @@ function updateCaveBullets(dt){
         if(b.pierce) b.pn++; else dead=true;
         break;
       }
+      if(!dead&&b.pv){ const Lv=window.__vtLive; for(const o of pvpList()){ // ⚔️ 같은 던전의 다른 플레이어에게 맞았는지
+        if(b.hit.has(o.uid)) continue; const dx=Math.abs(b.x-o.rx), dy=b.y-o.ry; if(dx>10||dy>6||dy<-36) continue;
+        if(Lv.perm&&Lv.perm.hit===false){ actOk('hit'); b.hit.add(o.uid); continue; }
+        if(b.exp){ dgBoomAt(c,b,null); dead=true; break; }
+        b.hit.add(o.uid); const head=dy<-25&&!b.beam, dm=b.dmg*(head?(b.hm||2.5):1)*Math.pow(.88,b.pn);
+        pvpSend(o,dm,Math.atan2(uy,ux),(b.kb||0)*Math.pow(.7,b.pn),head);
+        if(b.pierce) b.pn++; else dead=true; break; } }
     }
     if(dead) cbullets.splice(i,1);
   }
 }
+let _cvAtk=0;
 function updateCave(dt){
   if(inCave.k==='ruin'){ updateCaveBullets(dt); return updateDungeon(dt); }
   const c=inCave.cv;
@@ -5384,7 +5540,15 @@ function updateCave(dt){
   let tg=null, bd=TILE*1.7;
   for(const o of c.ores){ if(o.hp<=0) continue; const d=Math.hypot((o.x+.5)*TILE-CP.x,(o.y+.5)*TILE-CP.y); if(d<bd){ bd=d; tg=o; } }
   const wants=harvestBtn||(mouseDown&&mouse.in&&mouse.m), interval=hInterval(S.pick||1); P.tk='pick';
-  if(wants && tg){
+  _cvAtk=Math.max(0,_cvAtk-dt);
+  let pt=null; // ⚔️ 같은 동굴의 다른 플레이어를 곡괭이로 때려요 (바라보는 쪽 가까이 있을 때)
+  { const Lv=window.__vtLive; if(wants&&!(Lv&&Lv.perm&&Lv.perm.hit===false)){
+      const aa=(mouse.in&&mouse.m)?Math.atan2(mouse.y+camC.y-(CP.y-12),mouse.x+camC.x-CP.x):Math.atan2(P.fy,P.fx); let pd=58;
+      for(const o of pvpList()){ const rx=o.rx-CP.x, ry=(o.ry-10)-(CP.y-12), d=Math.hypot(rx,ry); if(d>=pd) continue; if(d>=26&&(rx*Math.cos(aa)+ry*Math.sin(aa))/d<.3) continue; if(!dgLos(c,CP.x,CP.y-12,o.rx,o.ry-12)) continue; pd=d; pt=o; } } }
+  if(pt){
+    const a=Math.atan2((pt.ry-10)-(CP.y-12),pt.rx-CP.x); P.fx=Math.cos(a); P.fy=Math.sin(a); P.hT=0; P.swing+=dt*14;
+    if(_cvAtk<=0){ _cvAtk=Math.max(.45,interval); P.atkT=.25; pvpSend(pt,Math.min(25,6+2*(S.pick||1)),a,6,false); beep([[220,.04]]); }
+  } else if(wants && tg){
     const m=Math.hypot((tg.x+.5)*TILE-CP.x,(tg.y+.5)*TILE-CP.y)||1;
     P.fx=((tg.x+.5)*TILE-CP.x)/m; P.fy=((tg.y+.5)*TILE-CP.y)/m;
     P.hT+=dt; P.swing+=dt*14;
@@ -5507,6 +5671,7 @@ function renderCave(t){
   ctx.fillStyle='#6b4a2f'; ctx.fillRect((c.ex-1)*TILE-4,c.ey*TILE-6,4,TILE+6); ctx.fillRect((c.ex+2)*TILE,c.ey*TILE-6,4,TILE+6); ctx.fillRect((c.ex-1)*TILE-4,c.ey*TILE-10,3*TILE+8,6);
   const ents=[];
   for(const o of c.ores) if(o.x>=x0-1&&o.x<=x1+1&&o.y>=y0-1&&o.y<=y1+1) ents.push({y:(o.y+1)*TILE,f:()=>drawOre(o,t)});
+  for(const o of caveGhosts()) ents.push({y:o.cry+8,f:()=>drawOther(Object.assign({},o,{rx:o.crx,ry:o.cry}))});
   ents.push({y:CP.y+8,f:()=>{ const sx=P.x, sy=P.y; P.x=CP.x; P.y=CP.y; drawPlayer(); P.x=sx; P.y=sy; }});
   ents.sort((a,b)=>a.y-b.y); ents.forEach(e=>e.f());
   if(c.tg){ const o=c.tg, cxr=(o.x+.5)*TILE, cyr=(o.y+.5)*TILE; // 겨냥한 광석 표시
@@ -5540,7 +5705,7 @@ function updateCaveUi(){
   caveBtn.style.display=(show&&near)?'block':'none';
   caveBtn.innerHTML=inCave?'🚪 나가기 <span class="kc">E</span>':(np&&np.k==='ruin'?RUIN_LOOK[np.th||'ruin'].ic+' '+RUIN_LOOK[np.th||'ruin'].n+' 입장 <span class="kc">E</span>':'🕳️ 동굴 입장 <span class="kc">E</span>');
   caveHud.style.display=(show&&inCave)?'block':'none';
-  if(inCave){ const c=inCave.cv, left=c.ores.filter(o=>o.hp>0).length; caveHud.textContent=`⛏️ 동굴 — 광석 가까이에서 클릭(꾹)으로 캐요 · 남은 광석 ${left}개 · 안쪽일수록 귀한 광물(은·금·자수정·루비·미스릴)이 나와요 · 출구에서 E로 나가요`; }
+  if(inCave){ const c=inCave.cv, left=c.ores.filter(o=>o.hp>0).length; caveHud.textContent=`⛏️ 동굴 — 광석 가까이에서 클릭(꾹)으로 캐요 · ⚔️ 같은 동굴의 다른 플레이어는 곡괭이로 때릴 수 있어요 · 남은 광석 ${left}개 · 안쪽일수록 귀한 광물(은·금·자수정·루비·미스릴)이 나와요 · 출구에서 E로 나가요`; }
 }
 
 
@@ -5642,9 +5807,9 @@ function dgChestNear(){
 }
 
 /* ---------- 던전 만들기 ---------- */
-function genDungeon(forced){
+function genDungeon(forced,seed){
   const thk=(forced&&THEMES[forced])?forced:THK[Math.random()*THK.length|0], TH=THEMES[thk], LY=THLAY[thk];
-  const w=DGW, h=DGH, rnd=Math.random, g=new Uint8Array(w*h).fill(1), rooms=[], path=new Set();
+  const w=DGW, h=DGH, rnd=seed?mulberry(seed):Math.random, g=new Uint8Array(w*h).fill(1), rooms=[], path=new Set(); // seed가 있으면(온라인) 같은 폐허는 모두 같은 모양
   const addRoom=(cx,cy,rw,rh,kind)=>{
     const r={ x0:cx-(rw>>1), y0:cy-(rh>>1), w:rw, h:rh, kind, cx, cy }; r.x1=r.x0+rw-1; r.y1=r.y0+rh-1;
     for(let y=r.y0;y<=r.y1;y++) for(let x=r.x0;x<=r.x1;x++) g[y*w+x]=0;
@@ -5748,7 +5913,7 @@ function enterDungeon(p){
   if(fishSt){ toast('낚시를 마치고 들어가요','bad'); return; }
   if(CMD.on) setCmd(false);
   selected=null; updateBar(); updateHint();
-  const c=p.dg=genDungeon(p.th); DP.hp=DP.max=100; DP.inv=1; DP.flash=0; DP.shake=0; DP.dash=0; DP.dashCd=0; DP.cd=0; DP.slow=0; DP.burn=0; DP.bt=0;
+  const Lv=window.__vtLive, c=p.dg=genDungeon(p.th,(Lv&&Lv.perm)?(90001+pois.indexOf(p)*131):0); DP.hp=DP.max=100; DP.inv=1; DP.flash=0; DP.shake=0; DP.dash=0; DP.dashCd=0; DP.cd=0; DP.slow=0; DP.burn=0; DP.bt=0;
   P.hold=S.weapon?'weapon':'pick'; P.tk='pick'; updateHotbar();
   inCave=p; CP.x=(c.ex+.5)*TILE; CP.y=(c.ey-.9)*TILE; camC.x=CP.x-vw/2; camC.y=CP.y-vh/2;
   P.target=null; P.hT=0; P.swing=0; P.moving=false; harvestBtn=false;
@@ -5767,7 +5932,7 @@ function exitDungeon(msg){
 }
 function dunAction(){
   const c=inCave.dg; if(DP.hp<=0) return;
-  const ch=dgChestNear(); if(ch){ dgOpenChest(c,ch); return; }
+  const ch=dgChestNear(); if(ch){ if(!actOk('chest')) return; dgOpenChest(c,ch); return; }
   if(dgExitNear()){ exitDungeon(); return; }
   toast('상자나 빛나는 출구 가까이에서 E를 눌러요','bad');
 }
@@ -5779,9 +5944,17 @@ function dgDash(){
   const m=Math.hypot(dx,dy)||1; DP.ddx=dx/m; DP.ddy=dy/m; burst(CP.x,CP.y,'#cfe0ff',6); beep([[300,.04]]);
 }
 function dgDie(){
-  const lost=Math.min(150,Math.floor(S.coin*.1)); S.coin-=lost;
-  exitDungeon(`💀 쓰러졌어요… 마을 사람들이 업어 왔어요${lost?` (🪙−${lost})`:''}`);
+  if(DP.dieT>0) return; DP.dieT=5; DP.hp=Math.min(DP.hp,0); DP.dash=0;
+  mouseDown=false; atkBtn=false; SCOPE.held=false;
   beep([[200,.1],[140,.12],[90,.2]]);
+  const by=(P.lastBy&&performance.now()-(P.lastByT||0)<8000)?P.lastBy:null; P.lastBy=null;
+  toast(by?`💀 ${by.n}님에게 쓰러졌어요 · 5초 뒤 부활해요`:'💀 쓰러졌어요 · 5초 뒤 부활해요','bad');
+  try{ const L=window.__vtLive; if(L&&L.onDown) L.onDown(by); }catch(e){}
+}
+function dgRealDie(){ // 5초가 지나면 마을 사람들이 업어 와요
+  const lost=Math.min(150,Math.floor(S.coin*.1)); S.coin-=lost; DP.dieT=0;
+  exitDungeon(`✨ 부활했어요! 마을 사람들이 업어 왔어요${lost?` (🪙−${lost})`:''}`);
+  P.hp=P.hpMax; P.invT=3; beep([[420,.06],[560,.08],[760,.1]]);
 }
 function dgHurtPlayer(dmg,fx_,fy_){
   if(DP.inv>0||DP.hp<=0) return;
@@ -5895,7 +6068,7 @@ function dgAttack(c){
       dgRayTraps(c,CP.x,CP.y-12,CP.x+cx*L2,CP.y-12+cy*L2);
       fx.shots.push({ k:w.shot||'bullet', x1:CP.x+cx*8, y1:CP.y-12+cy*8, x2:CP.x+cx*L2, y2:CP.y-12+cy*L2, life:w.pierce?.2:.12, max:w.pierce?.2:.12 });
     }
-    gunSnd(w); return;
+    peerStrike(w,Math.atan2(P.fy,P.fx)); gunSnd(w); return;
   }
   if(w.ranged){
     let t=null;
@@ -5913,6 +6086,7 @@ function dgAttack(c){
       dgHurtMon(c,t,dmg,crit);
       if(w.splash) for(const o of c.mons) if(o!==t&&!o.dead&&Math.hypot(o.x-t.x,o.y-t.y)<w.splash) dgHurtMon(c,o,w.dmg*.6,false);
     }
+    peerStrike(w,Math.atan2(P.fy,P.fx));
     if(w.gun) gunSnd(w); else beep([[420,.03]]);
   } else {
     DP.cd=w.cd; P.atkT=.25; P.cmb=(P.cmb|0)^1; try{ SFX.swing(w.id); }catch(e){}
@@ -5921,6 +6095,7 @@ function dgAttack(c){
     fx.shots.push({ k:'slash', x:CP.x, y:CP.y-8, a:Math.atan2(P.fy,P.fx), r:Math.min(w.range,78), big:!!w.sweep, life:.18, max:.18 });
     (w.sweep?live:live.slice(0,1)).forEach(m=>dgHurtMon(c,m,dmg,crit));
     for(const s of c.traps){ if(s.k!=='dart'||s.gone) continue; const tx_=(s.x+.5)*TILE, ty_=(s.y+.5)*TILE, d_=Math.hypot(tx_-CP.x,ty_-CP.y); if(d_<=Math.min(w.range,78)+14&&(d_<30||((tx_-CP.x)*P.fx+(ty_-CP.y)*P.fy)/d_>=.3)) dgHurtTrap(c,s); } // 🎯 화살 발사대 부수기
+    peerStrike(w,Math.atan2(P.fy,P.fx));
     beep([[live.length?260:180,.03]]);
   }
 }
@@ -6106,7 +6281,7 @@ function dgBoss2(c,m,dt,d,ux,uy){
 function updateDungeon(dt){
   const c=inCave.dg; c.t+=dt;
   DP.inv=Math.max(0,DP.inv-dt); DP.flash=Math.max(0,DP.flash-dt); DP.shake=Math.max(0,DP.shake-dt); DP.cd-=dt; DP.dashCd=Math.max(0,DP.dashCd-dt);
-  if(DP.hp<=0) return;
+  if(DP.hp<=0){ if(DP.dieT>0){ DP.dieT-=dt; if(DP.dieT<=0) dgRealDie(); } return; }
   if(DP.slow>0) DP.slow-=dt;
   if(DP.burn>0){ DP.burn-=dt; DP.bt-=dt; if(DP.bt<=0){ DP.bt=.5; DP.hp-=2; DP.flash=Math.max(DP.flash,.15); floatText(CP.x,CP.y-34,'-2','#ff9a4a'); if(DP.hp<=0){ dgDie(); return; } } }
   // 이동 (구르기 중에는 빠르게 미끄러져요)
@@ -6504,6 +6679,7 @@ function renderDungeon(t){
   for(const ch of c.chests) if(!ch.locked&&!ch.gone) ents.push({ y:(ch.y+1)*TILE, f:()=>drawDgChest(ch,t,dgChestNear()===ch) });
   for(const it of c.items) ents.push({ y:it.y, f:()=>{ const by=Math.sin(it.t*5)*3; ctx.font='20px sans-serif'; ctx.textAlign='center'; ctx.fillText('❤️',it.x,it.y-6+by); } });
   for(const m of c.mons) if(!m.dead) ents.push({ y:m.y+(m.dormant?-20:8), f:()=>drawMon(m,t) });
+  for(const o of caveGhosts()) ents.push({ y:o.cry+8, f:()=>drawOther(Object.assign({},o,{rx:o.crx,ry:o.cry})) });
   ents.push({ y:CP.y+8, f:()=>{ const sx=P.x, sy=P.y; P.x=CP.x; P.y=CP.y; ctx.globalAlpha=(DP.inv>0&&DP.dash<=0&&Math.floor(t*22)%2)?.4:1; drawPlayer(); ctx.globalAlpha=1; P.x=sx; P.y=sy; } });
   ents.sort((a,b)=>a.y-b.y); ents.forEach(e=>e.f());
   // 어둠: 내 주변만 보여요
@@ -7083,7 +7259,7 @@ let lastT=performance.now(), lastDt=0.016, hudT=0, saveT=0, jobT=0;
 function update(dt){
   fxIn=!!inCave; S.time+=dt; playerVitals(dt); if(CREATOR) creatorTick();
   const tod=(S.time%DAY)/DAY; NIGHT=clamp((-Math.cos(2*Math.PI*tod)-0.2)/0.8,0,1);
-  updateWeather(dt); updateEvents(dt); (inCave?updateCave(dt):updatePlayer(dt)); updateEconomy(dt); updateVillagers(dt); updateCritters(dt); updateV3(dt); cmdTick(dt);
+  updateWeather(dt); updateEvents(dt); (PDOWN>0?(P.moving=false,harvestBtn=false):(inCave?updateCave(dt):updatePlayer(dt))); updateEconomy(dt); updateVillagers(dt); updateCritters(dt); updateV3(dt); cmdTick(dt);
   for(const r of res) tickRes(r,dt);
   for(const p of fx.parts){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=260*dt; p.life-=dt; }
   fx.parts=fx.parts.filter(p=>p.life>0); casTick(dt);
@@ -7100,7 +7276,7 @@ function frame(now){
   if(started&&!PDEAD){ update(lastDt*(slowT>0?.35:1)); if(slowT>0) slowT-=lastDt; }
   if(inCave){ renderCave(now/1000); drawAlerts(now/1000); drawScope(); drawAmmo(); }
   else { render(now/1000); drawWeather(now/1000); drawAlerts(now/1000); drawCombo(now/1000); drawCmdScreen(); drawScope(); drawAmmo(); }
-  updateCaveUi();
+  updateCaveUi(); updateRespUi();
   requestAnimationFrame(frame);
 }
 
@@ -7774,7 +7950,7 @@ requestAnimationFrame(frame);
   const kid=async n=>'a'+hex(HASUB?await crypto.subtle.digest('SHA-256',enc.encode(n.toLowerCase())):sha256(enc.encode(n.toLowerCase()))).slice(0,24);
   const hp=async(pw,salt)=>{ if(HASUB){ const k=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveBits']); return hex(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:enc.encode(salt),iterations:100000},k,256)); } await new Promise(r=>setTimeout(r,30)); return hex(pbkdf2js(pw,salt,100000)); };
   const rnd16=()=>{ const a=new Uint8Array(16); if(window.crypto&&crypto.getRandomValues) crypto.getRandomValues(a); else for(let i=0;i<16;i++) a[i]=Math.random()*256|0; return hex(a); };
-  const say=t=>{ msg=t; render(); };
+  const say=t=>{ msg=t; const a=document.activeElement; if(a&&PN.contains(a)&&a.tagName==='INPUT') a.blur(); render(); };
   const val=id=>{ const el=document.getElementById(id); return el?el.value.trim():''; };
   const sv=k=>{ try{ k?localStorage.setItem(LS,k):localStorage.removeItem(LS); }catch(e){} };
   const gv=()=>{ try{ return localStorage.getItem(LS)||''; }catch(e){ return ''; } };
@@ -7783,6 +7959,7 @@ requestAnimationFrame(frame);
 
   function gate(){
     if(me||gOff){ G.style.display='none'; lab(); return; }
+    { const a=document.activeElement; if(G.dataset.sig&&a&&G.contains(a)&&a.tagName==='INPUT') return; } /* 입력 중에는 다시 그리지 않아요 */
     G.style.display='flex';
     let h='<div class="box"><h2>🏘️ 마을 타이쿤 온라인</h2>';
     if(!ready&&db===null&&aLoaded===false&&!gmsg&&window.__olWait) h+='<p>연결 중…</p>';
@@ -7790,17 +7967,27 @@ requestAnimationFrame(frame);
     else if(!aLoaded) h+='<p>연결 중…</p>';
     else {
       h+='<div class="tabs"><button data-g="in" class="'+(mode==='in'?'on':'')+'">입장</button><button data-g="up" class="'+(mode==='up'?'on':'')+'">계정 만들기</button></div>'
-       +'<input id="gNick" maxlength="12" placeholder="닉네임 (2~12자)" autocomplete="username" value="'+esc(val('gNick'))+'">'
+       +'<input id="gNick" maxlength="12" placeholder="닉네임 (2~12자)" autocomplete="username">'
        +'<input id="gPw" type="password" maxlength="40" placeholder="비밀번호 (4자 이상)" autocomplete="'+(mode==='up'?'new-password':'current-password')+'">'
        +'<button class="pri" data-g="go" '+(busy?'disabled':'')+'>'+(mode==='up'?'계정 만들고 입장':'입장하기')+'</button>';
     }
-    h+='<div id="gMsg">'+esc(gmsg)+'</div><button data-g="off">혼자 하기 (온라인 없이)</button></div>'; G.innerHTML=h;
+    h+='<div id="gMsg">'+esc(gmsg)+'</div><button data-g="off">혼자 하기 (온라인 없이)</button></div>';
+    if(G.dataset.sig===h) return; /* 내용이 같으면 다시 그리지 않아요 (입력 중 깜빡임·포커스 풀림 방지) */
+    const ae=document.activeElement, fid=ae&&G.contains(ae)?ae.id:'', sp=fid&&ae.selectionStart, nv=(document.getElementById('gNick')||{}).value||'', pv=(document.getElementById('gPw')||{}).value||'';
+    G.dataset.sig=h; G.innerHTML=h; const n1=document.getElementById('gNick'), p1=document.getElementById('gPw'); if(n1) n1.value=nv; if(p1) p1.value=pv;
+    if(fid){ const el=document.getElementById(fid); if(el){ el.focus(); try{ el.setSelectionRange(sp,sp); }catch(e){} } }
   }
+  ['keydown','keyup'].forEach(t=>{ G.addEventListener(t,e=>e.stopPropagation()); PN.addEventListener(t,e=>e.stopPropagation()); }); /* 입력 중 키가 게임(E·WASD 등)으로 새지 않게 */
+  PN.addEventListener('keydown',e=>{ if(e.key==='Enter'){ const b=PN.querySelector(e.target.id==='olFr'?'button[data-a=add]':(e.target.id==='olRoom'||e.target.id==='olRoomPw')?'button[data-a=mk]':'#none'); if(b) b.click(); } });
+  PN.addEventListener('input',e=>{ if(e.target.id==='olFr') refreshPpl(); });
+  PN.addEventListener('focusout',()=>setTimeout(()=>{ if(!typing(PN)) render(); },500));
+  G.addEventListener('focusout',()=>setTimeout(()=>{ if(!typing(G)) gate(); },500));
+  G.addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.tagName==='INPUT'){ const g=G.querySelector('button[data-g=go]'); if(g) g.click(); } });
   G.addEventListener('click',async e=>{
     const b=e.target.closest('button'); if(!b||!b.dataset.g) return; const g=b.dataset.g;
     if(g==='in'||g==='up'){ mode=g; gmsg=''; return gate(); }
     if(g==='off'){ gOff=true; return gate(); } if(g==='retry'){ location.reload(); return; }
-    if(busy) return; const n=val('gNick'), pw=document.getElementById('gPw').value;
+    if(busy) return; { const a=document.activeElement; if(a&&G.contains(a)&&a.tagName==='INPUT') a.blur(); } const n=val('gNick'), pw=document.getElementById('gPw').value;
     if(n.length<2) return (gmsg='닉네임은 2자 이상이에요',gate());
     if(pw.length<4) return (gmsg='비밀번호는 4자 이상이에요',gate());
     busy=true; gmsg='확인하는 중…'; gate();
@@ -7821,6 +8008,30 @@ requestAnimationFrame(frame);
 
   /* ---- 실시간: 같은 월드(방)에 들어온 친구 캐릭터가 보여요 ---- */
   let rm=null, rid=null, unsub=null, tick=null, pend=null, sentOff=false; const pm=new Map();
+  /* ---- ⚔️ 플레이어끼리 공격(PvP) · 🔑 방장 권한: 공격·처치 신호는 presence에 실어 보내고, 받는 쪽이 한 번만 처리해요 ---- */
+  const outHits=[], seenH=new Map(); let hseq=0, outKill=null, kseq=0, permOpen=null;
+  const permOf=(uid,f)=>{ const r=R.find(x=>x.id===rid); if(!r||!uid||r.o===uid) return true; const p=(r.pp||{})[uid]; return !p||p[f]!==0; };
+  const hitOut=()=>{ const n=Date.now(); while(outHits.length&&(n-outHits[0].t>1500||outHits.length>16)) outHits.shift(); return outHits.length?outHits.map(h=>h.a):null; };
+  const killOut=()=>{ if(outKill&&Date.now()-outKill.t>2500) outKill=null; return outKill?[outKill.id,outKill.to]:null; };
+  Object.assign(window.__vtLive,{
+    sendHit:(to,d,a,k,hd)=>{ if(!rm||!to) return; outHits.push({t:Date.now(),a:[++hseq,to,Math.round(d*10)/10,Math.round(a*100)/100,Math.round(k||0),hd?1:0]}); },
+    onDown:by=>{ if(by&&by.u&&rm) outKill={id:++kseq,to:by.u,t:Date.now()}; } });
+  setInterval(()=>{ const L=window.__vtLive; if(L) L.perm=rm?{build:permOf(me,'p'),break:permOf(me,'b'),hit:permOf(me,'h'),chest:permOf(me,'c')}:null; },400);
+  function procHits(pid,d){ const L=window.__vtLive, n=Date.now();
+    if(Array.isArray(d.h)) for(const h of d.h){ if(!Array.isArray(h)||h[1]!==me) continue; const key=pid+':'+h[0]; if(seenH.has(key)) continue; seenH.set(key,n);
+      const dm=+h[2]; if(!(dm>0)||!permOf(d.u,'h')) continue; /* 때리기 권한이 없는 멤버의 공격은 무시해요 */
+      if(L&&L.hurtMe) L.hurtMe(Math.min(dm,200),+h[3]||0,+h[4]||0,String(d.n||'?').slice(0,12),String(d.u||''),h[5]?1:0); }
+    if(Array.isArray(d.k)&&d.k[1]===me){ const key=pid+':k'+d.k[0]; if(!seenH.has(key)){ seenH.set(key,n); if(L&&L.toast) L.toast('⚔️ '+String(d.n||'?').slice(0,12)+' 님을 쓰러뜨렸어요!','good'); } }
+    if(seenH.size>400) for(const [k,t] of seenH) if(n-t>15000) seenH.delete(k); }
+  /* 🔑 멤버 권한 편집(방장 전용): 설치 · 부수기 · 때리기 · 상자 열기 */
+  const PFS=[['p','🏗️ 설치'],['b','🔨 부수기'],['h','⚔️ 때리기'],['c','📦 상자']];
+  function permHtml(r){ if(!r||r.o!==me) return ''; const ms=(r.m||[]).filter(x=>x!==r.o);
+    if(!ms.length) return '<p style="margin:6px 0;font-size:13px">아직 멤버가 없어요. 친구가 참가하면 여기서 권한을 정할 수 있어요.</p>';
+    return '<div style="margin:6px 0">'+ms.map(u=>{ const p=(r.pp||{})[u]||{};
+      return '<div style="border:1px solid #cfd8d6;border-radius:10px;padding:6px 8px;margin:4px 0"><b>'+esc(nm(u))+'</b><div style="margin-top:4px">'+PFS.map(([f,l])=>{ const on=p[f]!==0;
+        return '<button data-a="pm" data-k="'+esc(r.id)+'" data-u="'+esc(u)+'" data-f="'+f+'" style="'+BTN+'background:'+(on?'#bfe8c4':'#f3c3bd')+'">'+l+(on?' ✅':' 🚫')+'</button>'; }).join('')+'</div></div>'; }).join('')+'</div>'; }
+  async function togglePerm(k,u,f){ const r=R.find(x=>x.id===k); if(!r||r.o!==me||!db||!PFS.some(x=>x[0]===f)) return;
+    const pp=JSON.parse(JSON.stringify(r.pp||{})); const cur=(pp[u]||{})[f]; (pp[u]=pp[u]||{})[f]=cur===0?1:0; await db.doc('rooms/'+k).update({pp}); }
   /* ---- 친구 접속 상태: 누가 어느 월드에 있는지 로비 방에 알려요 ---- */
   let lobOn=false, lobRoom=null, lp=[], lastPub='';
   const friendIds=()=>me?E.filter(e=>e.s==='f'&&(e.a===me||e.b===me)).map(e=>e.a===me?e.b:e.a):[];
@@ -7829,9 +8040,16 @@ requestAnimationFrame(frame);
     try{ const room=await window.claude.use('room'); if(!room){ lobOn=false; return; } lobRoom=room;
       room.onPeers(ch=>{ lp=ch.peers.filter(p=>!p.isMe&&p.presence&&typeof p.presence.m==='string').map(p=>({m:p.presence.m,w:typeof p.presence.w==='string'?p.presence.w:null})); lab(); render(); });
       lastPub=''; pubLobby(); }catch(e){ lobOn=false; } }
-  const lab=()=>{ const fi=friendIds(), n=lp.filter(p=>p.w&&p.w!==rid&&fi.includes(p.m)).length;
+  const WH=document.createElement('div'); WH.id='olWho'; WH.style.cssText='position:fixed;left:calc(10px + env(safe-area-inset-left,0px));bottom:calc(54px + env(safe-area-inset-bottom,0px));z-index:99997;display:none;flex-direction:column;gap:4px;max-width:60vw'; document.body.appendChild(WH);
+  ['keydown','keyup'].forEach(t=>WH.addEventListener(t,e=>e.stopPropagation()));
+  WH.addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return; const o=[...pm.values()][+b.dataset.i]; const L=window.__vtLive; if(o&&L&&L.tp&&!L.tp(o.x,o.y)){ b.textContent='⚠️ 이동할 수 없는 곳이에요'; WH.dataset.sig=''; } });
+  function whoRender(){ const L=window.__vtLive, on=L&&L.me&&L.me().st&&rm&&pm.size; if(!on){ WH.style.display='none'; WH.dataset.sig=''; return; }
+    const h=[...pm.values()].map((o,i)=>'<button data-i="'+i+'" style="padding:5px 10px;border:2px solid #1d3b34;border-radius:99px;background:#ffe27a;color:#1d3b34;font:700 14px Jua,sans-serif;cursor:pointer;text-align:left">📍 '+esc(o.name)+(o.c?' (동굴 안)':'')+'</button>').join('');
+    if(WH.dataset.sig!==h){ WH.dataset.sig=h; WH.innerHTML=h; } WH.style.display='flex'; }
+  setInterval(whoRender,1500);
+  const lab=()=>{ const fi=friendIds(), n=lp.filter(p=>p.w&&p.w!==rid&&fi.includes(p.m)).length+(me?E.filter(e=>e.s==='p'&&e.b===me).length:0);
     B.textContent=(me?'🌐 '+nm(me):'🌐 온라인')+(rm?' · 👥'+(pm.size+1):'')+(n?' · 🔔'+n:'');
-    if(me&&db&&!lobOn) startLobby(); pubLobby(); };
+    if(me&&db&&!lobOn) startLobby(); pubLobby(); whoRender(); };
   const hx=v=>/^#[0-9a-f]{6}$/i.test(v||'')?v:'#888888';
   const safeLook=l=>{ l=l||{}; return {shirt:hx(l.shirt),skin:hx(l.skin),hat:hx(l.hat),hs:/^[a-z]{1,10}$/.test(l.hs||'')?l.hs:'straw'}; };
   async function leaveRoom(){ stopTown(); clearInterval(tick); tick=null; if(unsub){ try{unsub();}catch(e){} unsub=null; } const r=rm; rm=null; rid=null; pm.clear(); if(window.__vtLive) window.__vtLive.peers=[]; if(r){ try{ await r.leave(); }catch(e){} } lab(); }
@@ -7843,35 +8061,59 @@ requestAnimationFrame(frame);
     unsub=rm.onPeers(ch=>{ const seen=new Set();
       for(const p of ch.peers){ if(p.isMe) continue; const d=p.presence||{}; if(typeof d.x!=='number'||typeof d.y!=='number') continue; seen.add(p.peer);
         let o=pm.get(p.peer); if(!o){ o={rx:d.x,ry:d.y}; pm.set(p.peer,o); }
-        Object.assign(o,{x:d.x,y:d.y,fx:+d.fx||0,fy:+d.fy||1,mv:d.mv?1:0,wk:+d.wk||0,c:d.c?1:0,name:String(d.n||'?').slice(0,12),look:safeLook(d.look)}); }
+        Object.assign(o,{x:d.x,y:d.y,fx:+d.fx||0,fy:+d.fy||1,mv:d.mv?1:0,wk:+d.wk||0,c:d.c?1:0,ci:typeof d.ci==='string'?d.ci.slice(0,16):'',cx:+d.cx||0,cy:+d.cy||0,name:String(d.n||'?').slice(0,12),look:safeLook(d.look),uid:typeof d.u==='string'?d.u:'',dd:d.dd?1:0,pr:d.pr?1:0}); procHits(p.peer,d); }
       for(const k of [...pm.keys()]) if(!seen.has(k)) pm.delete(k);
       window.__vtLive.peers=[...pm.values()]; lab(); render(); });
     tick=setInterval(()=>{ const L=window.__vtLive; if(!L||!rm) return; const m=L.me();
-      if(!m.st){ if(!sentOff){ sentOff=true; rm.presence({x:null,y:null}); } return; } sentOff=false; rm.presence(Object.assign(m,{n:nm(me)})); },120);
+      if(!m.st){ if(!sentOff){ sentOff=true; rm.presence({x:null,y:null}); } return; } sentOff=false; rm.presence(Object.assign(m,{n:nm(me),u:me,h:hitOut(),k:killOut()})); },120);
     lab();
   }
-  setInterval(()=>{ const L=window.__vtLive; if(pend&&me&&db&&L&&L.me().st){ const id=pend; pend=null; joinRoom(id); } },800);
+  let autoAt=0;
+  setInterval(()=>{ const L=window.__vtLive; if(!(me&&db&&L&&L.me().st)) return;
+    if(pend){ const id=pend; pend=null; joinRoom(id); return; }
+    /* 내가 멤버인 월드와 같은 이름의 마을에 들어와 있고, 친구가 그 방에 있으면 자동으로 같은 방에 연결해요 */
+    if(rid||Date.now()-autoAt<8000) return; const w=L.world&&L.world(); if(!w) return;
+    const r=R.find(x=>(x.m||[]).includes(me)&&x.n===w.name&&lp.some(p=>p.w===x.id));
+    if(r){ autoAt=Date.now(); joinRoom(r.id); } },800);
   /* ---- 공유 마을: 건물을 db에 합치고 1초마다 맞춰요 ---- */
-  let tcol=null, tsnap=null, tUn=null, tbusy=false, known=new Map(); const bad=new Set(), rc=new Map();
+  let tcol=null, tsnap=null, tUn=null, tbusy=false, known=new Map(), rcol=null, rsnap=null, rUn=null, rknown=new Set(); const bad=new Set(), rc=new Map(), fail=new Map();
   const bk=(x,y)=>x+'_'+y, recent=k=>{ const n=Date.now(), t=rc.get(k); if(t&&n-t<6000) return true; rc.set(k,n); return false; };
-  function startTown(id){ stopTown(); tcol=db.collection('towns/'+id+'/b');
-    tUn=tcol.onSnapshot(s=>{ const m=new Map(); s.docs.forEach(d=>{ const v=d.data()||{}; if(typeof v.t==='string'&&Number.isInteger(v.x)&&Number.isInteger(v.y)) m.set(d.id,v); }); tsnap=m; },()=>{}); }
-  function stopTown(){ if(tUn){ try{tUn();}catch(e){} tUn=null; } tcol=null; tsnap=null; known=new Map(); bad.clear(); rc.clear(); }
+  /* 자리가 아직 안 비었을 수 있어서(건물 철거 신호가 늦게 올 때) 몇 번 더 시도해 보고 그래도 안 되면 포기해요 */
+  const miss=k=>{ const n=(fail.get(k)||0)+1; fail.set(k,n); if(n>=6) bad.add(k); };
+  function startTown(id){ stopTown(); tcol=db.collection('towns/'+id+'/b'); rcol=db.collection('towns/'+id+'/r');
+    tUn=tcol.onSnapshot(s=>{ const m=new Map(); s.docs.forEach(d=>{ const v=d.data()||{}; if(typeof v.t==='string'&&Number.isInteger(v.x)&&Number.isInteger(v.y)) m.set(d.id,v); }); tsnap=m; },()=>{});
+    rUn=rcol.onSnapshot(s=>{ const m=new Map(); s.docs.forEach(d=>{ const v=d.data()||{}; if(Number.isInteger(v.x)&&Number.isInteger(v.y)) m.set(d.id,v); }); rsnap=m; },()=>{}); }
+  function stopTown(){ if(tUn){ try{tUn();}catch(e){} tUn=null; } if(rUn){ try{rUn();}catch(e){} rUn=null; } tcol=null; tsnap=null; rcol=null; rsnap=null; known=new Map(); rknown=new Set(); bad.clear(); rc.clear(); fail.clear(); }
   async function townTick(){
-    const L=window.__vtLive; if(!tcol||!tsnap||tbusy||!L||!L.me().st) return; tbusy=true;
+    const L=window.__vtLive; if(!tcol||!tsnap||!rsnap||tbusy||!L||!L.me().st) return; tbusy=true;
     try{
-      const loc=new Map(L.bl().map(a=>[bk(a[1],a[2]),a])), rem=tsnap, ops=[];
+      const loc=new Map(L.bl().map(a=>[bk(a[1],a[2]),a])), rem=tsnap, ops=[], dels=[], adds=[];
+      const tryAdd=(k,v)=>{ if(L.addAt(v.t,v.x,v.y,v.lv,v.r)){ known.set(k,[v.t,v.x,v.y,v.lv||1,v.r]); fail.delete(k); } else miss(k); };
       for(const k of new Set([...loc.keys(),...rem.keys(),...known.keys()])){ if(bad.has(k)) continue;
-        const a=loc.get(k), v=rem.get(k), kn=known.has(k);
-        if(a&&v){ const rl=v.lv||1; if(rl>a[3]) L.setLv(a[1],a[2],rl); else if(a[3]>rl&&!recent('u'+k+a[3])) ops.push(()=>tcol.doc(k).update({lv:a[3]})); known.set(k,a); }
-        else if(!a&&v){ if(kn){ if(!recent('d'+k)) ops.push(()=>tcol.doc(k).delete()); } else if(L.addAt(v.t,v.x,v.y,v.lv)) known.set(k,[v.t,v.x,v.y,v.lv||1]); else bad.add(k); }
-        else if(a&&!v){ if(kn){ L.delAt(a[1],a[2]); known.delete(k); } else if(!recent('s'+k)) ops.push(()=>tcol.doc(k).set({t:a[0],x:a[1],y:a[2],lv:a[3]})); }
+        const a=loc.get(k), v=rem.get(k), kn=known.get(k);
+        if(a&&v){
+          if(v.t!==a[0]){ /* 같은 자리의 건물 종류가 바뀜 (예: 성벽 → 망루) */
+            if(kn&&kn[0]===v.t){ if(!recent('t'+k+a[0])) ops.push(()=>tcol.doc(k).set({t:a[0],x:a[1],y:a[2],lv:a[3],r:a[4]})); }
+            else { dels.push(()=>L.delAt(a[1],a[2])); adds.push(()=>tryAdd(k,v)); } }
+          else { const rl=v.lv||1; if(rl>a[3]) L.setLv(a[1],a[2],rl); else if(a[3]>rl&&!recent('u'+k+a[3])) ops.push(()=>tcol.doc(k).update({lv:a[3]})); known.set(k,a); fail.delete(k); } }
+        else if(!a&&v){ if(kn){ if(!recent('d'+k)) ops.push(()=>tcol.doc(k).delete()); } else adds.push(()=>tryAdd(k,v)); }
+        else if(a&&!v){ if(kn){ dels.push(()=>L.delAt(a[1],a[2])); known.delete(k); } else if(!recent('s'+k)) ops.push(()=>tcol.doc(k).set({t:a[0],x:a[1],y:a[2],lv:a[3],r:a[4]})); }
         else known.delete(k); }
+      /* 철거(자리 비우기)를 먼저 하고 그다음에 새 건물을 놓아야 서로 겹치지 않아요 */
+      dels.forEach(f=>f()); adds.forEach(f=>f());
+      /* 도로도 같이 공유해요 */
+      const rl=new Set(L.rd()), rr=rsnap;
+      for(const k of new Set([...rl,...rr.keys(),...rknown])){ if(bad.has('r'+k)) continue;
+        const a=rl.has(k), v=rr.get(k), kn=rknown.has(k);
+        if(a&&v) rknown.add(k);
+        else if(!a&&v){ if(kn){ if(!recent('rd'+k)) ops.push(()=>rcol.doc(k).delete()); } else if(L.addRoad(v.x,v.y)) rknown.add(k); else { const n=(fail.get('r'+k)||0)+1; fail.set('r'+k,n); if(n>=6) bad.add('r'+k); } }
+        else if(a&&!v){ const xy=k.split('_').map(Number); if(kn){ L.delRoad(xy[0],xy[1]); rknown.delete(k); } else if(!recent('rs'+k)) ops.push(()=>rcol.doc(k).set({x:xy[0],y:xy[1]})); }
+        else rknown.delete(k); }
       for(let i=0;i<ops.length;i+=8) await Promise.all(ops.slice(i,i+8).map(f=>f().catch(()=>{})));
     }catch(e){}
     tbusy=false;
   }
-  setInterval(townTick,1000);
+  setInterval(townTick,600);
   function playWorld(r){
     const L=window.__vtLive;
     if(L&&L.me().st){ if(!confirm('지금 마을이 이 월드와 합쳐져요. 건물이 서로 공유돼요. 계속할까요?')) return; joinRoom(r.id); return; }
@@ -7880,6 +8122,7 @@ requestAnimationFrame(frame);
     let row=find();
     if(!row){ const w=document.getElementById('wname'), mk=document.getElementById('wmake'); if(w&&mk){ w.value=r.n.slice(0,16); mk.click(); row=find(); } }
     const eb=row&&row.querySelector('button[data-enter]'); if(eb) eb.click();
+    else if(!(L&&L.me().st)){ pend=null; PN.style.display='flex'; say('같은 이름의 월드가 이미 있어 들어가지 못했어요. 월드 선택 화면에서 그 월드로 직접 들어간 뒤 게임 안 메뉴의 👥 친구 초대를 눌러 주세요'); }
   }
   async function init(){
     window.__olWait=1; gate();
@@ -7893,11 +8136,63 @@ requestAnimationFrame(frame);
       if(me&&!A[me]){ me=null; sv(''); }
       gate(); render();
     },()=>{ aLoaded=true; gmsg='서버에 연결하지 못했어요'; gate(); });
-    sub('edges',a=>{ E=a; }); sub('rooms',a=>{ R=a; });
+    sub('edges',a=>{ E=a; lab(); }); sub('rooms',a=>{ R=a; });
   }
 
+  /* 🔒 월드 비밀번호 확인 창 */
+  const AK=document.createElement('div'); AK.id='olAsk'; AK.style.cssText='position:fixed;inset:0;z-index:100001;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);padding:12px;box-sizing:border-box'; document.body.appendChild(AK);
+  ['keydown','keyup'].forEach(t=>AK.addEventListener(t,e=>e.stopPropagation()));
+  function askPassword(r){ return new Promise(res=>{
+    AK.innerHTML='<div style="width:min(340px,100%);background:#fff;color:#1d3b34;border-radius:16px;padding:18px 20px;box-sizing:border-box;font:500 15px/1.5 Noto Sans KR,sans-serif"><h3 style="margin:0 0 6px;font-size:20px">🔒 '+esc(r.n)+'</h3><p style="margin:0 0 8px">이 월드는 비밀번호가 필요해요.</p><input id="olAskPw" type="password" maxlength="40" placeholder="월드 비밀번호" style="width:100%;box-sizing:border-box;padding:8px 10px;border:2px solid #1d3b34;border-radius:8px;font:inherit;background:#fff;color:#1d3b34"><div id="olAskMsg" style="color:#c8452f;min-height:22px"></div><button id="olAskOk" style="padding:6px 14px;border:2px solid #1d3b34;border-radius:8px;background:#f2b632;color:#1d3b34;font:700 14px inherit;cursor:pointer">들어가기</button> <button id="olAskNo" style="padding:6px 14px;border:2px solid #1d3b34;border-radius:8px;background:#cfe6e8;color:#1d3b34;font:700 14px inherit;cursor:pointer">취소</button></div>';
+    AK.style.display='flex'; const pw=AK.querySelector('#olAskPw'), msg=AK.querySelector('#olAskMsg'); setTimeout(()=>pw.focus(),0);
+    const done=v=>{ AK.style.display='none'; AK.innerHTML=''; res(v); };
+    const ok=async()=>{ msg.textContent='확인하는 중…'; try{ if(await hp(pw.value,r.pw.s)===r.pw.h) done(true); else { msg.textContent='비밀번호가 달라요'; pw.value=''; pw.focus(); } }catch(e){ msg.textContent='확인하지 못했어요'; } };
+    AK.querySelector('#olAskOk').onclick=ok; AK.querySelector('#olAskNo').onclick=()=>done(false);
+    pw.addEventListener('keydown',e=>{ if(e.key==='Enter') ok(); else if(e.key==='Escape') done(false); }); }); }
+  const allow=async r=>!r.pw||(r.m||[]).includes(me)||askPassword(r);
+  /* 👥 게임 안 메뉴의 '친구 초대' */
+  const IV=document.createElement('div'); IV.id='olInv'; IV.style.cssText=AK.style.cssText.replace('100001','99999'); document.body.appendChild(IV);
+  ['keydown','keyup'].forEach(t=>IV.addEventListener(t,e=>e.stopPropagation()));
+  const pinv=new Set(); let ivBusy=false;
+  const ivMsg=t=>{ const el=document.getElementById('ivMsg'); if(el) el.textContent=t||''; };
+  const BTN='padding:5px 12px;border:2px solid #1d3b34;border-radius:8px;background:#cfe6e8;color:#1d3b34;font:700 14px inherit;cursor:pointer;margin:2px';
+  const curRoom=()=>{ const L=window.__vtLive, w=L&&L.world&&L.world(); if(!w||!me) return null;
+    return R.find(r=>r.id===rid)||(rid?null:(R.find(r=>r.o===me&&r.n===w.name)||R.find(r=>(r.m||[]).includes(me)&&r.n===w.name)))||null; };
+  function invRender(){ const L=window.__vtLive, w=L&&L.world&&L.world(), n=document.getElementById('ivN'); if(!n) return; n.textContent=w?w.name:'';
+    const r=curRoom(), shared=!!(r||rid), on=[nm(me),...[...pm.values()].map(o=>o.name)].map(esc).join(', ');
+    document.getElementById('ivInfo').innerHTML=shared?'🟢 공유 중 · 지금 접속: '+on+(r&&r.pw?' · 🔒':''):'아직 공유 전이에요. 친구를 초대하면 이 월드가 공유돼요.';
+    document.getElementById('ivPwW').style.display=shared?'none':'block';
+    { const pe=document.getElementById('ivPerm'); if(pe) pe.innerHTML=(r&&r.o===me)?'<h4 style="margin:10px 0 2px">🔑 멤버 권한 <small style="font-weight:400">(방장만 바꿀 수 있어요)</small></h4>'+permHtml(r):''; }
+    const fr=friendIds(); document.getElementById('ivList').innerHTML=fr.length?fr.map(id=>{ const st=lp.find(p=>p.m===id), isM=r&&(r.m||[]).includes(id), isI=(r&&(r.inv||[]).includes(id))||pinv.has(id);
+      return '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid #cfd8d6;border-radius:10px;margin:4px 0"><b style="flex:1">'+(st?'🟢 ':'⚪ ')+esc(nm(id))+'</b>'+(isM?'<span>멤버</span>':isI?'<span>초대함</span>':'<button data-id="'+esc(id)+'" style="'+BTN+'">초대</button>')+'</div>'; }).join(''):'<p>아직 친구가 없어요. 먼저 친구를 추가해 주세요.</p><button id="ivLobby" style="'+BTN+'">🌐 친구 추가하러 가기</button>'; }
+  function openInv(){ if(!me||!db){ PN.style.display='flex'; render(); say(me?'온라인에 연결되어 있지 않아요':'먼저 닉네임으로 입장해 주세요'); return; }
+    IV.innerHTML='<div style="width:min(420px,100%);max-height:100%;overflow:auto;background:#fff;color:#1d3b34;border-radius:16px;padding:18px 20px;box-sizing:border-box;font:500 15px/1.5 Noto Sans KR,sans-serif"><h3 style="margin:0 0 6px;font-size:20px">👥 친구 초대 · <span id="ivN"></span></h3><div id="ivInfo" style="margin-bottom:8px"></div><div id="ivPwW"><input id="ivPw" type="password" maxlength="40" placeholder="월드 비밀번호 (선택)" style="width:100%;box-sizing:border-box;padding:8px 10px;border:2px solid #1d3b34;border-radius:8px;font:inherit;background:#fff;color:#1d3b34;margin-bottom:6px"></div><div id="ivList"></div><div id="ivPerm"></div><div id="ivMsg" style="color:#c8452f;min-height:22px"></div><button id="ivClose" style="'+BTN+'">닫기</button></div>';
+    IV.style.display='flex'; invRender(); }
+  IV.addEventListener('pointerdown',e=>{ if(e.target===IV) IV.style.display='none'; });
+  IV.addEventListener('click',async e=>{ const b=e.target.closest('button'); if(!b) return;
+    if(b.dataset.a==='pm'){ try{ await togglePerm(b.dataset.k,b.dataset.u,b.dataset.f); }catch(err){ ivMsg('권한을 바꾸지 못했어요'); } invRender(); return; }
+    if(b.id==='ivClose'){ IV.style.display='none'; return; } if(b.id==='ivLobby'){ IV.style.display='none'; PN.style.display='flex'; render(); return; }
+    const id=b.dataset.id; if(!id||ivBusy) return; ivBusy=true; ivMsg('초대하는 중…');
+    try{ const L=window.__vtLive, w=L.world&&L.world(); if(!w) throw 0; let r=curRoom();
+      if(!r&&!rid){ const wp=(document.getElementById('ivPw')||{}).value||'', o={n:w.name,o:me,m:[me],inv:[id]}; if(wp){ const sl=rnd16(); o.pw={s:sl,h:await hp(wp,sl)}; }
+        const nid='r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); await db.doc('rooms/'+nid).set(o); await joinRoom(nid); pinv.add(id); ivMsg(nm(id)+' 님을 초대했어요. 이 월드가 공유됐어요'); }
+      else { const base=r||{id:rid,inv:[]}; await db.doc('rooms/'+base.id).update({inv:[...new Set([...(base.inv||[]),...pinv,id])]}); pinv.add(id); if(rid!==base.id) await joinRoom(base.id); ivMsg(nm(id)+' 님을 초대했어요'); }
+    }catch(err){ ivMsg('초대하지 못했어요. 이 페이지에 쓰기 권한이 있는지 확인해 주세요'); }
+    ivBusy=false; invRender(); });
+  { const mb=document.createElement('button'); mb.className='mbtn panel'; mb.id='ivBtn'; mb.title='이 월드에 친구 초대'; mb.textContent='👥 친구 초대'; const ex=document.getElementById('exitBtn'); if(ex&&ex.parentNode) ex.parentNode.insertBefore(mb,ex); mb.addEventListener('click',openInv); }
+  async function sendReq(id){ if(id===me) return say('나에게는 신청할 수 없어요'); const key=[me,id].sort().join('_'); if(E.some(x=>x.id===key)) return say('이미 신청했거나 친구예요'); await db.doc('edges/'+key).set({a:me,b:id,s:'p'}); say(nm(id)+' 님에게 친구 신청을 보냈어요'); }
+  function pplHtml(){ const q=((document.getElementById('olFr')||{}).value||'').trim().toLowerCase();
+    const skip=new Set([me,...friendIds(),...E.filter(e=>e.s==='p'&&e.b===me).map(e=>e.a),...E.filter(e=>e.s==='p'&&e.a===me).map(e=>e.b)]);
+    const ppl=Object.keys(A).filter(id=>!skip.has(id)&&(!q||(A[id].name||'').toLowerCase().includes(q))).slice(0,8);
+    let h='<small style="display:block;margin-top:8px">가입한 사람'+(q?' (검색: '+esc(q)+')':'')+' — 눌러서 바로 신청</small>';
+    ppl.forEach(id=>h+='<div class="row"><b>'+esc(nm(id))+'</b><button data-a="addid" data-k="'+esc(id)+'">친구 신청</button></div>');
+    if(!ppl.length) h+='<small>신청할 수 있는 사람이 없어요</small>'; return h; }
+  function refreshPpl(){ const el=document.getElementById('olPpl'); if(!el) return; const nh=pplHtml(); if(el.dataset.sig!==nh){ el.dataset.sig=nh; el.innerHTML=nh; } }
+  const typing=(root)=>{ const a=document.activeElement; return !!(a&&root.contains(a)&&a.tagName==='INPUT'); };
   function render(){
+    if(IV.style.display==='flex') invRender();
     if(PN.style.display!=='flex') return;
+    if(typing(PN)){ refreshPpl(); return; } /* 입력 중에는 입력칸을 건드리지 않아요 (한글 조합이 끊기지 않게) */
     let h='<div class="box"><h2>🌐 온라인 로비</h2>';
     if(!ready) h+='<p>온라인 기능은 <b>올려진 게임 페이지</b>에서 로그인한 상태로 열었을 때만 쓸 수 있어요. 파일을 직접 연 경우에는 꺼져 있어요.</p>';
     else if(!me){ h+='<p>먼저 닉네임으로 입장해 주세요.</p><button data-a="gate">입장 화면 열기</button>'; }
@@ -7908,18 +8203,23 @@ requestAnimationFrame(frame);
       inn.forEach(e=>h+='<div class="row"><b>'+esc(nm(e.a))+'</b> 님이 친구 신청했어요 <button data-a="ok" data-k="'+esc(e.id)+'">수락</button><button data-a="no" data-k="'+esc(e.id)+'">거절</button></div>');
       out.forEach(e=>h+='<div class="row"><b>'+esc(nm(e.b))+'</b> 님에게 신청 중… <button data-a="no" data-k="'+esc(e.id)+'">취소</button></div>');
       fr.forEach(f=>{ const st=lp.find(p=>p.m===f.id), wr=st&&st.w&&R.find(r=>r.id===st.w);
-        h+='<div class="row"><b>'+(st?'🟢 ':'⚪ ')+esc(nm(f.id))+'</b>'+(wr?'<small>🏘️ '+esc(wr.n)+' 월드에서 플레이 중</small><button data-a="follow" data-k="'+esc(wr.id)+'">따라 들어가기</button>':'')+'<button data-a="no" data-k="'+esc(f.k)+'">삭제</button></div>'; });
+        h+='<div class="row"><b>'+(st?'🟢 ':'⚪ ')+esc(nm(f.id))+'</b>'+(wr?'<small>🏘️ '+(wr.pw?'🔒 ':'')+esc(wr.n)+' 월드에서 플레이 중</small><button data-a="follow" data-k="'+esc(wr.id)+'">따라 들어가기</button>':'')+'<button data-a="no" data-k="'+esc(f.k)+'">삭제</button></div>'; });
       if(!fr.length&&!inn.length&&!out.length) h+='<p>아직 친구가 없어요.</p>';
+      h+='<div id="olPpl">'+pplHtml()+'</div>';
       const inv=R.filter(r=>(r.inv||[]).includes(me)), mine=R.filter(r=>(r.m||[]).includes(me));
-      h+='<h3>월드 초대</h3>'; inv.forEach(r=>h+='<div class="row"><b>'+esc(r.n)+'</b><small>'+esc(nm(r.o))+' 님의 초대</small><button data-a="join" data-k="'+esc(r.id)+'">참가</button><button data-a="deny" data-k="'+esc(r.id)+'">거절</button></div>');
+      h+='<h3>월드 초대</h3>'; inv.forEach(r=>h+='<div class="row"><b>'+(r.pw?'🔒 ':'')+esc(r.n)+'</b><small>'+esc(nm(r.o))+' 님의 초대</small><button data-a="join" data-k="'+esc(r.id)+'">참가</button><button data-a="deny" data-k="'+esc(r.id)+'">거절</button></div>');
       if(!inv.length) h+='<p>받은 초대가 없어요.</p>';
-      h+='<h3>내 월드</h3><div class="row"><input id="olRoom" maxlength="16" placeholder="새 월드 이름"><button data-a="mk">월드 만들기</button></div>';
+      h+='<h3>내 월드</h3><div class="row"><input id="olRoom" maxlength="16" placeholder="새 월드 이름"><input id="olRoomPw" type="password" maxlength="40" placeholder="비밀번호 (선택)"><button data-a="mk">월드 만들기</button></div>';
       mine.forEach(r=>{ const opts=fr.filter(f=>!(r.m||[]).includes(f.id)&&!(r.inv||[]).includes(f.id)).map(f=>'<option value="'+esc(f.id)+'">'+esc(nm(f.id))+'</option>').join('');
-        h+='<div class="row"><b>'+esc(r.n)+'</b><small>멤버: '+(r.m||[]).map(x=>esc(nm(x))).join(', ')+((r.inv||[]).length?' · 초대 중: '+r.inv.map(x=>esc(nm(x))).join(', '):'')+(r.id===rid?'<br>🟢 지금 접속 중: '+[esc(nm(me))].concat([...pm.values()].map(o=>esc(o.name))).join(', '):'')+'</small>'
+        h+='<div class="row"><b>'+(r.pw?'🔒 ':'')+esc(r.n)+'</b><small>멤버: '+(r.m||[]).map(x=>esc(nm(x))).join(', ')+((r.inv||[]).length?' · 초대 중: '+r.inv.map(x=>esc(nm(x))).join(', '):'')+(r.id===rid?'<br>🟢 지금 접속 중: '+[esc(nm(me))].concat([...pm.values()].map(o=>esc(o.name))).join(', '):'')+'</small>'
          +(opts?'<select id="olSel_'+esc(r.id)+'">'+opts+'</select><button data-a="inv" data-k="'+esc(r.id)+'">초대</button>':'')
-         +'<button data-a="play" data-k="'+esc(r.id)+'">▶ 플레이</button><button data-a="leave" data-k="'+esc(r.id)+'">나가기</button></div>'; });
+         +'<button data-a="play" data-k="'+esc(r.id)+'">▶ 플레이</button>'+(r.o===me?'<button data-a="pmopen" data-k="'+esc(r.id)+'">🔑 권한</button>':'')+'<button data-a="leave" data-k="'+esc(r.id)+'">나가기</button>'+(permOpen===r.id?'<div style="width:100%;flex-basis:100%">'+permHtml(r)+'</div>':'')+'</div>'; });
     }
-    h+='<div id="olMsg">'+esc(msg)+'</div><button data-a="close">닫기</button></div>'; PN.innerHTML=h;
+    h+='<div id="olMsg">'+esc(msg)+'</div><button data-a="close">닫기</button></div>';
+    if(PN.dataset.sig===h) return; const st={}; PN.querySelectorAll('input,select').forEach(el=>{ if(el.id) st[el.id]=el.value; });
+    const ae=document.activeElement, fid=ae&&PN.contains(ae)?ae.id:'', sp=fid&&ae.selectionStart; PN.dataset.sig=h; PN.innerHTML=h;
+    for(const id in st){ const el=document.getElementById(id); if(el) el.value=st[id]; }
+    if(fid){ const el=document.getElementById(fid); if(el){ el.focus(); try{ el.setSelectionRange(sp,sp); }catch(x){} } }
   }
   PN.addEventListener('click',async e=>{
     const b=e.target.closest('button'); if(!b||!b.dataset.a) return; const a=b.dataset.a, k=b.dataset.k;
@@ -7927,14 +8227,17 @@ requestAnimationFrame(frame);
       if(a==='close'){ PN.style.display='none'; return; }
       if(a==='gate'){ PN.style.display='none'; gOff=false; return gate(); }
       if(a==='logout'){ leaveRoom(); me=null; pubLobby(); sv(''); gOff=false; mode='in'; PN.style.display='none'; return gate(); }
-      if(a==='add'){ const n=val('olFr').toLowerCase(), id=Object.keys(A).find(i=>(A[i].name||'').toLowerCase()===n); if(!id) return say('그 닉네임을 찾을 수 없어요'); if(id===me) return say('나에게는 신청할 수 없어요'); const key=[me,id].sort().join('_'); if(E.some(x=>x.id===key)) return say('이미 신청했거나 친구예요'); await db.doc('edges/'+key).set({a:me,b:id,s:'p'}); say('친구 신청을 보냈어요'); }
+      if(a==='add'){ const n=val('olFr').toLowerCase(), id=Object.keys(A).find(i=>(A[i].name||'').toLowerCase()===n); if(!id) return say('그 닉네임을 찾을 수 없어요'); await sendReq(id); }
+      else if(a==='addid'){ await sendReq(k); }
+      else if(a==='pm'){ await togglePerm(k,b.dataset.u,b.dataset.f); }
+      else if(a==='pmopen'){ permOpen=permOpen===k?null:k; PN.dataset.sig=''; render(); }
       else if(a==='ok'){ await db.doc('edges/'+k).update({s:'f'}); say('친구가 됐어요'); }
       else if(a==='no'){ await db.doc('edges/'+k).delete(); say(''); }
-      else if(a==='mk'){ const n=val('olRoom'); if(!n) return say('월드 이름을 입력해 주세요'); await db.doc('rooms/r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)).set({n,o:me,m:[me],inv:[]}); say('월드를 만들었어요'); }
+      else if(a==='mk'){ const n=val('olRoom'); if(!n) return say('월드 이름을 입력해 주세요'); const o={n,o:me,m:[me],inv:[]}, wp=(document.getElementById('olRoomPw')||{}).value||''; if(wp){ const sl=rnd16(); o.pw={s:sl,h:await hp(wp,sl)}; } await db.doc('rooms/r'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)).set(o); say(wp?'비밀번호가 걸린 월드를 만들었어요':'월드를 만들었어요'); }
       else { const r=R.find(x=>x.id===k); if(!r) return;
-        if(a==='follow'){ PN.style.display='none'; if(!(r.m||[]).includes(me)) await db.doc('rooms/'+k).update({m:[...new Set([...(r.m||[]),me])],inv:(r.inv||[]).filter(x=>x!==me)}); playWorld(r); }
+        if(a==='follow'){ PN.style.display='none'; if(!(await allow(r))) return; if(!(r.m||[]).includes(me)) await db.doc('rooms/'+k).update({m:[...new Set([...(r.m||[]),me])],inv:(r.inv||[]).filter(x=>x!==me)}); playWorld(r); }
         else if(a==='inv'){ const f=val('olSel_'+k); if(f){ await db.doc('rooms/'+k).update({inv:[...new Set([...(r.inv||[]),f])]}); say('초대를 보냈어요'); } }
-        else if(a==='join'){ await db.doc('rooms/'+k).update({m:[...new Set([...(r.m||[]),me])],inv:(r.inv||[]).filter(x=>x!==me)}); say('월드에 참가했어요'); }
+        else if(a==='join'){ if(!(await allow(r))) return; await db.doc('rooms/'+k).update({m:[...new Set([...(r.m||[]),me])],inv:(r.inv||[]).filter(x=>x!==me)}); say('월드에 참가했어요'); }
         else if(a==='deny'){ await db.doc('rooms/'+k).update({inv:(r.inv||[]).filter(x=>x!==me)}); say(''); }
         else if(a==='leave'){ if(r.id===rid) leaveRoom(); const m=(r.m||[]).filter(x=>x!==me); if(!m.length) await db.doc('rooms/'+k).delete(); else await db.doc('rooms/'+k).update({m,o:r.o===me?m[0]:r.o}); say('월드에서 나갔어요'); }
         else if(a==='play'){ PN.style.display='none'; playWorld(r); }
