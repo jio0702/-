@@ -1,0 +1,27 @@
+workflows:
+  android-debug-apk:
+    name: Village Tycoon Android APK
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      node: 22
+      java: 17
+    scripts:
+      - name: Install JavaScript dependencies
+        script: |
+          npm install --no-audit --no-fund
+      - name: Validate game scripts
+        script: |
+          npm run check
+      - name: Generate Android project and copy web assets
+        script: |
+          npx cap add android
+          npx cap sync android
+      - name: Build installable debug APK
+        script: |
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+    artifacts:
+      - android/app/build/outputs/apk/debug/*.apk
+      - android/app/build/outputs/logs/*

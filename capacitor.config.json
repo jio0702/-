@@ -1,0 +1,9 @@
+{
+  "appId": "com.villagetycoon.apocalypse",
+  "appName": "마을 타이쿤",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": { "androidScheme": "https" },
+  "ios": { "contentInset": "automatic" },
+  "android": { "allowMixedContent": false }
+}
